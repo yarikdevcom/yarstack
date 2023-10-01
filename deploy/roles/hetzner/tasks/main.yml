@@ -1,0 +1,182 @@
+---
+
+- name: 'Create a private network'
+  hetzner.hcloud.hcloud_network:
+    api_token: '{{ server_api_key }}'
+    name: '{{ server_private_network_name }}'
+    ip_range: '{{ server_private_network_range }}'
+    state: present
+  when: server_private_network_name
+
+- name: 'Create a private network sub-net'
+  hetzner.hcloud.hcloud_subnetwork:
+    api_token: '{{ server_api_key }}'
+    network: '{{ server_private_network_name }}'
+    ip_range: '{{ server_private_network_range }}'
+    network_zone: '{{ server_private_network_region }}'
+    type: cloud
+    state: present
+  when: server_private_network_name
+
+- name: Create server if not provided bare metal ip
+  block:
+  - name: Gather hcloud ssh-key infos
+    hetzner.hcloud.hcloud_ssh_key_info:
+      api_token: '{{ server_api_key }}'
+    register: keys
+
+  - name: Remove keys with samefingerprint but different name
+    hetzner.hcloud.hcloud_ssh_key:
+      api_token: '{{ server_api_key }}'
+      name: '{{ existing.name }}'
+      state: absent
+    vars:
+      filter: "[?contains(public_key, '{{ item.key }}')]"
+      existing: '{{ keys.hcloud_ssh_key_info | json_query(filter) | first | default({}) }}'
+    when: existing and existing.name != item.name
+    loop: '{{ server_keys }}'
+
+  - name: Add ssh keys
+    hetzner.hcloud.hcloud_ssh_key:
+      api_token: '{{ server_api_key }}'
+      name: '{{ item.name }}'
+      public_key: '{{ item.key }}'
+      state: present
+    vars:
+      filter: "[?contains(public_key, '{{ item.key }}')].name"
+      exists: '{{ keys.hcloud_ssh_key_info | json_query(filter) }}'
+    when: not exists
+    loop: '{{ server_keys }}'
+
+  - name: Create a basic server with ssh key
+    hetzner.hcloud.hcloud_server:
+      api_token: '{{ server_api_key }}'
+      name: '{{ server_name }}'
+      server_type: '{{ server_type }}'
+      image: '{{ server_image }}'
+      location: '{{ server_location }}'
+      enable_ipv4: '{{ server_enable_ipv4 }}'
+      enable_ipv6: '{{ server_enable_ipv6 }}'
+      private_networks: '{% if server_private_network_name %}["{{ server_private_network_name }}"]{% else %}[]{% endif %}'
+      state: present
+      ssh_keys: "{{ server_keys | map(attribute='name') | list }}"
+
+  - name: Ensure the server is started
+    hetzner.hcloud.hcloud_server:
+      api_token: '{{ server_api_key }}'
+      name: '{{ server_name }}'
+      state: started
+
+  - name: Gather hcloud server info
+    hetzner.hcloud.hcloud_server_info:
+      api_token: '{{ server_api_key }}'
+      name: '{{ server_name }}'
+    register: server_hcloud
+
+  - name: Set server info var
+    ansible.builtin.set_fact:
+      server: '{{ server_hcloud.hcloud_server_info | first }}'
+
+  - name: Wait for ssh
+    ansible.builtin.wait_for:
+      port: 22
+      host: '{{ server.ipv4_address }}'
+
+  - name: Set server ipv4
+    ansible.builtin.set_fact:
+      server_ipv4_address: '{{ server.ipv4_address }}'
+
+  when: not server_ipv4_address
+
+- name: Create Hetzner DNS Zone
+  ansible.builtin.uri:
+    url: "https://dns.hetzner.com/api/v1/zones"
+    method: POST
+    headers:
+      Auth-API-Token: '{{ server_dns_api_key }}'
+    body_format: json
+    body:
+      name: "{{ item | split('.') | list_slice(-2, -1) | join('.') }}.{{ item | split('.') | last }}"
+      ttl: 300
+    status_code: 200, 422
+  loop: '{{ server_domains }}'
+
+- name: 'Retrieve the A records for {{ item }}'
+  community.dns.hetzner_dns_record_set_info:
+    zone: "{{ item | split('.') | list_slice(-2, -1) | join('.') }}.{{ item | split('.') | last }}"
+    record: '{{ item }}'
+    type: A
+    hetzner_token: '{{ server_dns_api_key }}'
+  register: dns_records
+  loop: '{{ server_domains }}'
+
+- name: Delete A records using the results
+  community.dns.hetzner_dns_record_set:
+    state: absent
+    zone: "{{ item.invocation.module_args.zone_name }}"
+    record: "{{ item.set.record }}"
+    ttl: "{{ item.set.ttl }}"
+    type: "{{ item.set.type }}"
+    value: "{{ item.set.value }}"
+    hetzner_token: '{{ server_dns_api_key }}'
+  loop: '{{ dns_records.results }}'
+
+- name: Add ipv4 A records to host
+  community.dns.hetzner_dns_record:
+    hetzner_token: '{{ server_dns_api_key }}'
+    state: present
+    zone_name: "{{ item | split('.') | list_slice(-2, -1) | join('.') }}.{{ item | split('.') | last }}"
+    type: A
+    record: '{{ item }}'
+    ttl: 300
+    value: '{{ server_ipv4_address }}'
+  loop: '{{ server_domains }}'
+
+# - name: Add ipv6 AAAA records to host
+#   community.dns.hetzner_dns_record:
+#     api_token: '{{ server_dns_api_key }}'
+#     state: present
+#     zone_name: "{{ item | split('.') | list_slice(-2, -1) | join('.') }}.{{ item | split('.') | last }}"
+#     type: AAAA
+#     record: '{{ item }}'
+#     ttl: 300
+#     value: '{{ server.ipv6 }}'
+#   loop: '{{ server_domains }}'
+
+- name: Ensure known_hosts file exists
+  ansible.builtin.copy:
+    dest: ~/.ssh/known_hosts
+    content: ''
+    force: false
+    mode: '600'
+
+- name: Check if address already in known hosts
+  ansible.builtin.lineinfile:
+    path: '~/.ssh/known_hosts'
+    state: present
+    line: '{{ server_ipv4_address }}'
+  check_mode: true
+  register: key_in_file
+
+- name: Remove old key if exists
+  ansible.builtin.command: ssh-keygen -R {{ server_ipv4_address }}
+  when: key_in_file
+
+- name: Update ssh-keys
+  ansible.builtin.shell: ssh-keyscan {{ server_ipv4_address }} >> ~/.ssh/known_hosts
+  register: response
+  changed_when: response.rc != 0
+
+- name: Add host to groups
+  ansible.builtin.add_host:
+    name: '{{ server_ipv4_address }}'
+    groups: '{{ server_groups }}'
+
+- name: Save to the hosts file
+  ansible.builtin.template:
+    src: 'hosts.ini.j2'
+    dest: './hosts.ini'
+
+- name: Set server address
+  ansible.builtin.set_fact:
+    server_ipv4_address: ''

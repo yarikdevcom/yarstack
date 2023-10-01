@@ -1,0 +1,13 @@
+- name: Update DNS in namecheap provider
+  ansible.builtin.uri:
+    url: "https://api.namecheap.com/xml.response?\
+      apiuser={{ namecheap_api_user }}&\
+      username={{ namecheap_api_user }}&\
+      apikey={{ namecheap_api_key }}&\
+      Command=namecheap.domains.dns.setCustom&\
+      ClientIp={{ namecheap_client_ip }}&\
+      TLD={{ item | split('.') | last }}&\
+      SLD={{ item | split('.') | list_slice(-2, -1) | join('.') }}&\
+      NameServers={{ namecheap_dns | join(',') }}"
+  loop: '{{ namecheap_domains }}'
+  delegate_to: localhost

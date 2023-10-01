@@ -1,0 +1,9 @@
+---
+# tasks file for loop
+
+- name: Place and run task file
+  ansible.builtin.include_tasks: role-exec.yml
+  with_items: "{{ loop_items }}"
+  no_log: true
+  loop_control:
+     loop_var: loop_this_item

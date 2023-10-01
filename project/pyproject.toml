@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "project"
+version = "0.1.0"
+description = ""
+authors = ["Morty Space <morty.space@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+flask = "^2.3.3"
+uvicorn = "^0.23.2"
+asgiref = "^3.7.2"
+pydantic-settings = "^2.0.3"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dev-server = "cli:dev_server"
+server = "cli:server"

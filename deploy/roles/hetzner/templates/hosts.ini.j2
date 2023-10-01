@@ -1,0 +1,8 @@
+{% for group_name, hosts in groups.items() %}
+{% if group_name not in ('localhost', 'all', 'ungrouped') %}
+[{{ group_name }}]
+{% for host in hosts %}
+{{ host }}
+{% endfor %}
+{% endif %}
+{% endfor %}

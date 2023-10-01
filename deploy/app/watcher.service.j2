@@ -1,0 +1,15 @@
+[Unit]
+Description=Watch backend files to update frontend
+After=network.target
+
+[Service]
+Type=simple
+User={{ app_owner }}
+
+ExecStart={{ app_source_dir_path }}/backend/.venv/bin/watchfiles "touch {{ app_source_dir_path }}/frontend/src/api.ts" {{ app_source_dir_path }}/backend
+
+TimeoutSec=0
+WorkingDirectory={{ app_source_dir_path }}
+
+[Install]
+WantedBy=multi-user.target

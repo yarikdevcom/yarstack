@@ -1,0 +1,119 @@
+app_name: '' # name of app
+app_project: '' # project namespace
+app_env: '' # dev, test, prod
+app_branch: '' # branch name
+app_user: '' # if not set generated from env-branch-project
+
+app_is_backend: false
+app_is_frontend: false
+
+app_nginx_domain: ''
+app_nginx_domain_root: ''
+app_nginx_domain_dns_hetzner: true
+app_nginx_domain_certbot_email: ''
+app_nginx_domain_https: true
+
+app_host: '0.0.0.0'
+app_port: null
+app_port_offset: 0
+app_instances: 1 # number of instances to run
+app_dev_port: 20000
+app_test_port: 30000
+app_prod_port: 40000
+
+app_version: '' # version of app to get git version == code version
+app_version_from_code: true # package.json or pyproject.tom etc.
+# if git version != code version error
+# if no version found error
+app_env_config: 'env.j2'
+
+app_code_rsync_dir: ''
+app_code_rsync_args: '--exclude .venv --exclude node_modules'
+app_code_repo: 'git@git' # <- repo used for project then rsync
+app_code_dir_path: '/home/{{ app_user }}/{{ app_name }}/{{ app_version }}'
+
+# try next upstream -> system restart one by one if instances is less
+# then was then just shutdown them
+# get list of instances then determine what restart and what shutdown
+# upstream backend {
+#     server a.example.net;
+#     server b.example.net backup;
+# }
+
+# TODO: implement
+# for now 
+# if dev -> only current src sync into code {{ app_name }}
+# prev -> symlink into {{ app_name }}/{{ app_version }}
+# if test -> current, new -> current is symlink {{ app_name }}/current, {{ app_name }}/{{ app_version }}
+# if prod -> current, new
+# -> v0.1 | v0.2 new -> v0.1 (app_name_v_0_1, started app_name_v_0_2)
+
+# run unit-tests, code-level tests
+app_unit_test_install: ''
+app_unit_test_build: ''
+app_unit_test_run: ''
+
+# build for prod/test env commands
+app_install: ''
+app_build: ''
+app_run: ''
+
+# build and run for dev env commands
+app_dev_install: ''
+app_dev_build: ''
+app_dev_run: ''
+
+# python(poetry)
+# TODO: move into
+app_build_python: false
+app_commands_python: '{{ app_build_python }}'
+
+app_python_version: '3.11.5'
+app_python_poetry_version: '1.6.1'
+app_python_user: 'python'
+app_python_dest_dir_path: '/home/{{ app_python_user }}/{{ app_python_version }}'
+app_python_poetry_bin: '{{ app_python_dest_dir_path }}/bin/poetry'
+app_python_build_and_run: '{{ app_python_install }}'
+
+app_python_command: 'server --host 0.0.0.0 --port {{ app_port }}'
+app_python_dev_command: 'dev-server --host 0.0.0.0 --port {{ app_port }}'
+app_python_unit_test_command: 'pytest'
+
+app_python_unit_test_install: '{{ app_python_poetry_bin }} install'
+app_python_unit_test_build: ''
+app_python_unit_test_run: '{{ app_python_poetry_bin }} run {{ app_python_unit_test_command }}'
+app_python_dev_install: '{{ app_python_poetry_bin }} install'
+app_python_dev_build: ''
+app_python_dev_run: '{{ app_python_poetry_bin }} run {{ app_python_dev_command }}'
+app_python_install: '{{ app_python_poetry_bin }} install --only main --compile'
+app_python_build: ''
+app_python_run: '{{ app_python_poetry_bin }} run {{ app_python_command }}'
+
+
+# node(nvm,yarn)
+# https://github.com/nodejs/node/blob/main/BUILDING.md#unix-and-macos
+app_build_node: false
+app_commands_node: '{{ app_build_node }}'
+app_node_user: 'node'
+app_node_nvm_version: 'v0.39.4'
+app_node_version: 'v20.5.1'
+app_node_npm_version: '9.8.1'
+app_node_yarn_version: '1.22.19'
+app_node_bin_dir_path: '/home/{{ app_node_user }}/.nvm/versions/node/{{ app_node_version }}/bin'
+app_node_run_bin_path: '{{ app_node_bin_dir_path }}/node'
+app_node_npm_bin_path: '{{ app_node_run_bin_path }} {{ app_node_bin_dir_path }}/npm'
+app_node_yarn_bin_path: '{{ app_node_run_bin_path }} {{ app_node_bin_dir_path }}/yarn'
+
+app_node_command: 'server'
+app_node_dev_command: 'dev-server --host 0.0.0.0 --port {{ app_port }}'
+app_node_unit_test_command: 'test'
+
+app_node_unit_test_install: '{{ app_node_yarn_bin_path }} install --non-interactive'
+app_node_unit_test_build: ''
+app_node_unit_test_run: '{{ app_node_yarn_bin_path }} run {{ app_node_unit_test_command }}'
+app_node_dev_install: '{{ app_node_yarn_bin_path }} install --non-interactive'
+app_node_dev_build: ''
+app_node_dev_run: '{{ app_node_yarn_bin_path }} run {{ app_node_dev_command }}'
+app_node_install: '{{ app_node_yarn_bin_path }} install --prod=true --non-interactive'
+app_node_build: '{{ app_node_yarn_bin_path }} run build'
+app_node_run: 'HOST=0.0.0.0 PORT={{ app_port }} {{ app_node_yarn_bin_path }} run {{ app_node_command }}'

@@ -1,0 +1,240 @@
+---
+
+- name: Create owner user if not exists
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ postgresql_user }}'
+
+- name: Get Postgresql binary from cache
+  simplecache:
+    name: "{{ postgresql_cache_key }}"
+    dest: "{{ postgresql_dest_dir_path }}"
+    token: "blah"
+  register: cache
+
+- name: Update packages
+  ansible.builtin.apt:
+    update_cache: true
+  when: not cache.exists
+
+- name: Install build requirements
+  ansible.builtin.apt:
+    pkg: [
+      'build-essential', 'flex', 'bison', 'libreadline6-dev',
+      'zlib1g-dev', 'libossp-uuid-dev', 'libsystemd-dev',
+      'libreadline-dev', 'libxml2-dev', 'libxslt-dev', 'libssl-dev',
+      'libxml2-utils', 'xsltproc', 'ccache', 'lz4'
+    ]
+  when: not cache.exists
+
+- name: Remove old Postgresql build dir if exists
+  ansible.builtin.file:
+    path: '{{ postgresql_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Create Postgresql build dir
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.file:
+    path: '{{ postgresql_build_temp }}'
+    state: directory
+    recurse: true
+  when: not cache.exists
+
+- name: Download Postgresql distribution
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.get_url:
+    url: https://ftp.postgresql.org/pub/source/v{{ postgresql_version }}/postgresql-{{ postgresql_version }}.tar.gz
+    dest: '{{ postgresql_build_temp }}/postgresql.tar.xz'
+    mode: '0644'
+  when: not cache.exists
+
+- name: Unpack Postgresql distribution
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.unarchive:
+    remote_src: true
+    src: '{{ postgresql_build_temp }}/postgresql.tar.xz'
+    dest: '{{ postgresql_build_temp }}'
+  when: not cache.exists
+
+- name: Remove old Postgresql executable
+  ansible.builtin.file:
+    path: '{{ postgresql_dest_dir_path }}'
+    state: absent
+  when: not cache.exists
+
+- name: Configure Build
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.command:
+    chdir: '{{ postgresql_build_temp }}/postgresql-{{ postgresql_version }}'
+    cmd:
+      ./configure
+      --prefix={{ postgresql_dest_dir_path }}
+      --with-systemd
+    creates: '{{ postgresql_dest_dir_path }}/Makefile'
+  when: not cache.exists
+
+- name: Build Postgresql
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.command:
+    chdir: '{{ postgresql_build_temp }}/postgresql-{{ postgresql_version }}'
+    cmd: 'make -j {{ ansible_processor_vcpus }} world-bin'
+    creates: 'src/bin/psql/psql'
+  when: not cache.exists
+
+- name: Check build
+  become: true
+  become_user: '{{ postgresql_user }}'
+  register: result
+  changed_when: result.rc != 0
+  ansible.builtin.command:
+    chdir: '{{ postgresql_build_temp }}/postgresql-{{ postgresql_version }}'
+    cmd: 'make check'
+  when: not cache.exists
+
+- name: Install Postgresql
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.command:
+    chdir: '{{ postgresql_build_temp }}/postgresql-{{ postgresql_version }}'
+    cmd: 'make install-world-bin'
+    creates: '{{ postgresql_bin_path }}/postgres'
+  when: not cache.exists
+
+- name: Remove old Postgresql build dir if exists
+  ansible.builtin.file:
+    path: '{{ postgresql_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Set Postgresql binary cache
+  simplecache:
+    name: "{{ cache.name }}"
+    src: "{{ cache.dest }}"
+    token: "{{ cache.token }}"
+  when: not cache.exists
+
+- name: Change cache owner
+  ansible.builtin.file:
+    dest: '{{ cache.dest }}'
+    owner: '{{ postgresql_user }}'
+    recurse: true
+
+- name: Check db data directory
+  ansible.builtin.stat:
+    path: '{{ postgresql_data_dir_path }}'
+  register: postgresql_data_dir
+
+- name: Create data directory
+  become: true
+  become_user: '{{ postgresql_user }}'
+  register: result
+  changed_when: result.rc != 0
+  ansible.builtin.command:
+    chdir: '/home/{{ postgresql_user }}'
+    cmd: '{{ postgresql_bin_path }}/initdb -D {{ postgresql_data_dir_path }} --locale {{ postgresql_locale }}'
+  when: not postgresql_data_dir.stat.exists
+
+- name: Set postgresql.conf configuration
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.template:
+    src: postgresql.conf.j2
+    dest: '{{ postgresql_data_dir_path }}/postgresql.conf'
+    mode: 0644
+
+- name: Set pg_hba.conf configuration
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: '{{ postgresql_data_dir_path }}/pg_hba.conf'
+    mode: 0644
+
+- name: Copy systemd service configuration
+  ansible.builtin.template:
+    src: postgresql.service.j2
+    dest: /etc/systemd/system/postgresql.service
+    mode: 0644
+  when: postgresql_systemd_scope == 'system'
+
+- name: Create systemd user dir
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.file:
+    dest: '~/.config/systemd/user'
+    state: 'directory'
+  when: postgresql_systemd_scope != 'system'
+
+- name: Create unix dir
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.file:
+    dest: '{{ postgresql_unix_socket_dir_path }}'
+    state: 'directory'
+
+- name: Copy systemd service configuration
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.template:
+    src: postgresql.service.j2
+    dest: '~/.config/systemd/user/postgresql.service'
+    mode: 0644
+  when: postgresql_systemd_scope != 'system'
+
+- name: Start Postgresql
+  ansible.builtin.systemd:
+    name: postgresql
+    enabled: true
+    daemon_reload: true
+    state: restarted
+  when: postgresql_systemd_scope == 'system'
+
+- name: Get UID of gogs user
+  ansible.builtin.command: "id -u {{ postgresql_user }}"
+  register: postgresql_uid_result
+  changed_when: false
+  when: postgresql_systemd_scope != 'system'
+
+- name: Set custom fact for gogs_uid
+  ansible.builtin.set_fact:
+    postgresql_user_uid: "{{ postgresql_uid_result.stdout }}"
+  when: postgresql_systemd_scope != 'system'
+
+- name: Start Postgresql for User
+  become: true
+  become_user: '{{ postgresql_user }}'
+  ansible.builtin.systemd:
+    scope: '{{ postgresql_systemd_scope }}'
+    name: postgresql
+    enabled: true
+    daemon_reload: true
+    state: restarted
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ postgresql_user_uid }}"
+  when: postgresql_systemd_scope != 'system'
+
+- name: Create users
+  community.postgresql.postgresql_user:
+    login_user: '{{ postgresql_user }}'
+    login_unix_socket: '{{ postgresql_unix_socket_dir_path }}'
+    db: 'postgres'
+    name: '{{ item.user }}'
+  with_items: '{{ postgresql_dbs }}'
+
+- name: Create dbs
+  community.postgresql.postgresql_db:
+    login_user: '{{ postgresql_user }}'
+    login_unix_socket: '{{ postgresql_unix_socket_dir_path }}'
+    name: '{{ item.name }}'
+    encoding: UTF-8
+    owner: '{{ item.user }}'
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+  with_items: '{{ postgresql_dbs }}'

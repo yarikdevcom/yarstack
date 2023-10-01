@@ -1,0 +1,19 @@
+[Unit]
+Description=PostgreSQL database server
+After=network.target
+
+[Service]
+Type=notify
+{% if postgresql_systemd_scope == 'system' %}
+User={{ postgresql_user }}
+{% endif %}
+ExecStart={{ postgresql_bin_path }}/postgres -D {{ postgresql_data_dir_path }}
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutSec=0
+
+{% if postgresql_systemd_scope == 'system' %}
+[Install]
+WantedBy=multi-user.target
+{% endif %}

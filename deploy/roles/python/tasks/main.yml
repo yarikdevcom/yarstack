@@ -1,0 +1,137 @@
+---
+
+- name: Create owner user if not exists
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ python_user }}'
+
+- name: Check Python bin
+  ansible.builtin.stat:
+    path: "{{ python_bin_path }}"
+  register: python_bin
+
+- block:
+  - name: Get Python binary from cache
+    simplecache:
+      name: "{{ python_cache_key }}"
+      dest: "{{ python_dest_dir_path }}"
+      token: "blah"
+    register: cache
+
+  - name: Update packages
+    ansible.builtin.apt:
+      update_cache: true
+    when: not cache.exists
+
+  - name: Install build requirements
+    ansible.builtin.apt:
+      pkg: [
+        'make', 'build-essential', 'libssl-dev', 'zlib1g-dev',
+        'libbz2-dev', 'libreadline-dev', 'libsqlite3-dev',
+        'llvm', 'libncurses5-dev', 'libncursesw5-dev', 'xz-utils',
+        'tk-dev', 'tcl-dev', 'libffi-dev', 'ccache', 'lz4',
+        'libsystemd-dev'
+      ]
+    when: not cache.exists
+
+  - name: Remove old Python build dir if exists
+    ansible.builtin.file:
+      path: '{{ python_build_temp }}'
+      state: absent
+    when: not cache.exists
+
+  - name: Create Python build dir
+    ansible.builtin.file:
+      path: '{{ python_build_temp }}'
+      state: directory
+      recurse: true
+    when: not cache.exists
+
+  - name: Download Python distribution
+    ansible.builtin.get_url:
+      url: https://www.python.org/ftp/python/{{ python_version }}/Python-{{ python_version }}.tar.xz
+      dest: '{{ python_build_temp }}/python.tar.xz'
+      mode: '0644'
+    when: not cache.exists
+
+  - name: Unpack Python distribution
+    ansible.builtin.unarchive:
+      remote_src: true
+      src: '{{ python_build_temp }}/python.tar.xz'
+      dest: '{{ python_build_temp }}'
+    when: not cache.exists
+
+  - name: Remove old Python executable
+    ansible.builtin.file:
+      path: '{{ python_dest_dir_path }}'
+      state: absent
+    when: not cache.exists
+
+  - name: Configure Build
+    ansible.builtin.command:
+      chdir: '{{ python_build_temp }}/Python-{{ python_version }}'
+      cmd:
+        ./configure
+        --prefix={{ python_dest_dir_path }}
+        --enable-loadable-sqlite-extensions
+        --enable-shared
+        --enable-optimizations
+        --with-system-expat
+        --with-lto
+        --with-ensurepip=upgrade
+        --with-system-ffi
+        --enable-ipv6
+        --with-threads
+        LDFLAGS="-L{{ python_dest_dir_path }}/extlib/lib -Wl,--rpath={{ python_dest_dir_path }}/lib -Wl,--rpath={{ python_dest_dir_path }}/extlib/lib"
+        CPPFLAGS="-I{{ python_dest_dir_path }}/extlib/include"
+      creates: '{{ python_dest_dir_path }}/Makefile'
+    when: not cache.exists
+
+  - name: Build Python
+    ansible.builtin.command:
+      chdir: '{{ python_build_temp }}/Python-{{ python_version }}'
+      cmd: 'make -j {{ ansible_processor_vcpus }}'
+      creates: 'build'
+    async: 2400
+    poll: 20
+    when: not cache.exists
+
+  - name: Install Python
+    ansible.builtin.command:
+      chdir: '{{ python_build_temp }}/Python-{{ python_version }}'
+      cmd: 'make -j {{ ansible_processor_vcpus }} install'
+      creates: '{{ python_dest_dir_path }}/bin/python3'
+    when: not cache.exists
+
+  - name: Remove Python build dir
+    ansible.builtin.file:
+      path: '{{ python_build_temp }}'
+      state: absent
+    when: not cache.exists
+
+  - name: Install Poetry
+    async: 120
+    poll: 5
+    ansible.builtin.pip:
+      name:
+        - pip
+        - poetry=={{ python_poetry_version }}
+      executable: '{{ python_dest_dir_path }}/bin/pip3'
+    when: not cache.exists
+
+  - name: Set Python binary cache
+    simplecache:
+      name: "{{ cache.name }}"
+      src: "{{ cache.dest }}"
+      token: "{{ cache.token }}"
+    when: not cache.exists
+
+  - name: Add to user path
+    become: true
+    become_user: '{{ python_set_path_for_user }}'
+    ansible.builtin.lineinfile:
+      path: '/home/{{ python_set_path_for_user }}/.zshrc'
+      line: 'export PATH="{{ python_dest_dir_path }}/bin:$PATH"'
+    when: python_set_path_for_user
+  when: not python_bin.stat.exists

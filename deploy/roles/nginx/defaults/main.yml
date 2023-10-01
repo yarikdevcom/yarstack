@@ -1,0 +1,34 @@
+---
+
+# https://nginx.org/en/download.html
+# https://github.com/PCRE2Project/pcre2/releases
+# https://www.openssl.org/source/
+# https://www.zlib.net
+
+nginx_version: '1.25.2'
+nginx_user: 'nginx'
+nginx_dest_dir_path: '/home/{{ nginx_user }}/{{ nginx_version }}/'
+nginx_bin_path: '{{ nginx_dest_dir_path }}/sbin'
+nginx_data_dir_path: '/home/{{ nginx_user }}/data'
+nginx_certs_dir_path: '/home/{{ nginx_user }}/certs'
+nginx_acme_dir_path: '/home/{{ nginx_user }}/acme'
+nginx_build_temp: '/home/{{ nginx_user }}/build-{{ nginx_version }}'
+nginx_certbot_dir_path: '/home/{{ nginx_user }}/bot'
+nginx_certbot_email: ''
+nginx_worker_connections: 5000
+nginx_worker_processes: 2
+nginx_pcre2_version: '10.42'
+nginx_zlib_version: '1.3'
+nginx_openssl_version: '1.1.1v'
+nginx_packages:
+  - { name: 'nginx.tar.gz', url: 'http://nginx.org/download/nginx-{{ nginx_version }}.tar.gz'}
+  - {
+    name: 'pcre2.tar.gz',
+    url: 'https://github.com/PCRE2Project/pcre2/releases/download/pcre2-{{ nginx_pcre2_version }}/pcre2-{{ nginx_pcre2_version }}.tar.gz'
+  }
+  - { name: 'openssl.tar.gz', url: 'https://www.openssl.org/source/openssl-{{ nginx_openssl_version }}.tar.gz'}
+  - { name: 'zlib.tar.gz', url: 'http://www.zlib.net/zlib-{{ nginx_zlib_version }}.tar.gz'}
+nginx_cache_key: "{{ nginx_dest_dir_path | replace('/', '_') }}_pcre2_{{ nginx_pcre2_version }}_zlib_{{ nginx_zlib_version }}_openssl_{{ nginx_openssl_version }}"
+nginx_dev_reload_envs_ips: ['217.103.16.234', '178.63.79.101', '127.0.0.1']
+nginx_apps_project: ''
+nginx_apps: []

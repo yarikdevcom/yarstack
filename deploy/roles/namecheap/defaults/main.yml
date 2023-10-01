@@ -1,0 +1,12 @@
+---
+
+# https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/
+
+namecheap_client_ip: '178.63.79.101'
+namecheap_api_user: 'yaroslav0rudenok'
+namecheap_api_key: ''
+namecheap_dns:
+  - hydrogen.ns.hetzner.com
+  - oxygen.ns.hetzner.com
+  - helium.ns.hetzner.de
+namecheap_domains: []

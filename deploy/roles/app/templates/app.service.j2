@@ -1,0 +1,14 @@
+[Unit]
+Description={{ app_name }}
+After=network.target
+StartLimitIntervalSec=1
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+TimeoutSec=5
+
+ExecStart={{ app_run }}
+WorkingDirectory={{ app_code_dir_path }}
+# Environment="APP_ENV={{ app_env }}"

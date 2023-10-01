@@ -1,0 +1,54 @@
+---
+
+- name: Get btop from cache
+  simplecache:
+    name: "{{ btop_cache_key }}"
+    dest: "./btop"
+    token: ""
+  register: cache
+
+- name: Update cache packages
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Install build requirements
+  ansible.builtin.apt:
+    pkg: [
+      'git', 'coreutils', 'sed', 'build-essential', 'rsync', 'lz4',
+      'make', 'ninja-build', 'gettext', 'libtool', 'libtool-bin',
+      'autoconf', 'automake', 'cmake', 'g++', 'pkg-config', 'unzip',
+      'curl', 'doxygen'
+    ]
+
+- name: Download btop distribution
+  ansible.builtin.git:
+    repo: '{{ btop_repo }}'
+    force: true
+    version: '{{ btop_version }}'
+    dest: './btop'
+  when: not cache.exists
+
+- name: Build btop
+  ansible.builtin.command:
+    chdir: ./btop
+    cmd: make -j {{ ansible_processor_vcpus }}
+    creates: ./btop/bin/btop
+  when: not cache.exists
+
+- name: Set cache for btop
+  simplecache:
+    name: "{{ btop_cache_key }}"
+    src: "{{ cache.dest }}"
+    token: "{{ cache.token }}"
+  when: not cache.exists
+
+- name: Install btop
+  ansible.builtin.command:
+    chdir: ./btop
+    cmd: make install
+    creates: /usr/local/bin/btop
+
+- name: Remove btop repo
+  ansible.builtin.file:
+    path: ./btop
+    state: absent

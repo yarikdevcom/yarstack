@@ -1,0 +1,154 @@
+---
+
+- name: Create user if not exists
+  ansible.builtin.user:
+    name: '{{ zsh_user }}'
+    shell: /bin/zsh
+    groups: "{{ zsh_user_groups }}"
+    append: true
+
+- name: Check ohmyzsh exists
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.stat:
+    path: '{{ zsh_user_home_path }}/.oh-my-zsh'
+  register: ohmyzsh_folder
+
+# - name: Skip all tasks if established user
+#   ansible.builtin.meta: end_play
+#   when: ohmyzsh_folder.stat.exists
+# TODO: add checks per blocks not for all zsh
+
+- name: Add ssh owner keys
+  ansible.posix.authorized_key:
+    user: '{{ zsh_user }}'
+    state: present
+    key: '{{ item }}'
+  with_items: '{{ zsh_user_ssh_keys }}'
+
+- name: Change shell to zsh
+  register: shell_changed
+  changed_when: shell_changed.rc != 0
+  ansible.builtin.command: 'chsh -s /bin/zsh {{ zsh_user }}'
+
+- name: Download ohmyzsh
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh
+    dest: '{{ zsh_user_home_path }}/install.sh'
+    mode: '0744'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Install ohmyzsh
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.command:
+    '{{ zsh_user_home_path }}/install.sh --unattended'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Remove install script
+  ansible.builtin.file:
+    dest: '{{ zsh_user_home_path }}/install.sh'
+    state: absent
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Download p10k
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.git:
+    repo: https://github.com/romkatv/powerlevel10k.git
+    version: v1.16.1
+    depth: 1
+    dest: '{{ zsh_user_home_path }}/.oh-my-zsh/custom/themes/powerlevel10k'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Download zsh-autosuggestions plugin
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.git:
+    repo: https://github.com/zsh-users/zsh-autosuggestions.git
+    version: v0.7.0
+    depth: 1
+    dest: '{{ zsh_user_home_path }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Copy p10k config
+  ansible.posix.synchronize:
+    src: '{{ role_path }}/files/p10k.zsh'
+    dest: '{{ zsh_user_home_path }}/.p10k.zsh'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Change p10k config owner
+  ansible.builtin.file:
+    dest: '{{ zsh_user_home_path }}/.p10k.zsh'
+    owner: '{{ zsh_user }}'
+    group: '{{ zsh_user }}'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Change theme
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    regexp: "^ZSH_THEME="
+    line: ZSH_THEME="powerlevel10k/powerlevel10k"
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Set Plugins
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    regexp: "^plugins=()"
+    line: plugins=(git zsh-autosuggestions)
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Apply p10k config
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    line: '[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Get UID of user
+  ansible.builtin.command: "id -u {{ zsh_user }}"
+  register: zsh_user_uid_result
+  changed_when: false
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Set fact zsh user uid
+  ansible.builtin.set_fact:
+    zsh_user_uid: "{{ zsh_user_uid_result.stdout }}"
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Ensure lingering enabled
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ zsh_user }}"
+    creates: "/var/lib/systemd/linger/{{ zsh_user }}"
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Disable auto update
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    line: 'export DISABLE_AUTO_UPDATE="true"'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Add runtime dir to access systemd
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    line: 'export XDG_RUNTIME_DIR="/run/user/$UID"'
+  when: not ohmyzsh_folder.stat.exists
+
+- name: Append opt paths
+  become: true
+  become_user: '{{ zsh_user }}'
+  ansible.builtin.lineinfile:
+    path: '{{ zsh_user_home_path }}/.zshrc'
+    line: 'source /etc/zsh_profile'
+  when: not ohmyzsh_folder.stat.exists

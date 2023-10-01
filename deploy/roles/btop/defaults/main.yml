@@ -1,0 +1,7 @@
+---
+
+# https://github.com/aristocratos/btop/releases
+
+btop_repo: 'https://github.com/aristocratos/btop.git'
+btop_version: 'v1.2.13'
+btop_cache_key: 'btop_{{ btop_version }}'

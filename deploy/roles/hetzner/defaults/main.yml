@@ -1,0 +1,30 @@
+---
+
+# DNS: https://docs.hetzner.com/dns-console/dns/general/authoritative-name-servers
+
+server_name: ''
+
+# available: types: 'cax41'
+server_type: 'cax21'
+
+# available locations: 'hel1-1'
+server_location: 'hel1-1'
+# server images: 'debian-12'
+server_image: 'debian-12'
+
+# do not create server just use existing hetzner bare-metal
+server_ipv4_address: ''
+server_private_network_name: ''
+server_private_network_region: 'eu-central'
+server_private_network_range: '10.0.0.0/24'
+server_enable_ipv4: true
+server_enable_ipv6: true
+server_api_key: ''
+server_dns_api_key: ''
+server_keys:
+  - name: 'runner'
+    key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+  - name: 'morty'
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMOmFtdQSGNEgx+4z93mOEQ9syOkmMJx4ILnXf7UpXJf i@mortydev.com"
+server_groups: 'all'
+server_domains: []

@@ -1,0 +1,369 @@
+---
+
+# TODO: flow for core stack
+
+# gogs -> git repo management
+# worker -> run ansible deploy script inside repo
+# worker runs on task from redis
+# project api -> create new branch, update ansible deploy
+
+# TODO: fix dns records not overwrite old ones
+# TODO: cleanup everything that not needed
+
+- name: 'Prepare servers'
+  hosts:
+    - localhost
+  tags:
+    - localhost
+  vars:
+    project_name: &project-name 'myproject'
+    project_domain_root: &project-domain-root 'yarchik.com'
+    project_domain_certbot_email:
+      &project-domain-certbot-email 'morty.space@gmail.com'
+    project_branches: &project-branches
+      - start
+      - another
+    project_envs: &project-envs [dev, test, prod]
+    project_apps: &project-apps
+      - role: app
+        load_balancer:
+          proxy_location: '/'
+        app_name: 'some-backend'
+        app_code_rsync_dir: '../../../../project/'
+        app_build_python: true
+        app_instances: 1
+        app_port_offset: 0
+
+      - role: app
+        load_balancer:
+          proxy_location: '/'
+          https: true
+
+        app_name: 'frontend'
+        app_code_rsync_dir: '../../../../frontend/'
+        app_build_node: true
+        app_port_offset: 20
+        app_instances: 1
+
+        dev:
+          load_balancer:
+            websocket_location: '/__ws_reload__'
+
+      - role: gogs
+        envs: [prod]
+        gogs_domain: 'blah.yarchik.com'
+        gogs_port: '7500'
+        gogs_admin_name: 'yara'
+        gogs_admin_email: 'morty.space@gmail.com'
+        gogs_admin_password: 'zhjckfdyjrbfy73'
+
+        load_balancer:
+          proxy_location: '/'
+          https: true
+
+  tasks:
+    - name: "Tell subsequent tasks to use our deploy virtualenv"
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /opt/ansible/bin/python
+
+    - name: 'App debug'
+      ansible.builtin.debug:
+        var: project_apps
+
+    - name: 'Namecheap DNS update'
+      ansible.builtin.include_role:
+        name: namecheap
+      vars:
+        namecheap_domains:
+          - '{{ project_domain_root }}'
+
+    - name: 'Create one dev server'
+      ansible.builtin.include_role:
+        name: better_roles
+      vars:
+        loop_role: hetzner
+        loop_vars:
+          server_groups:
+            # inside dev, test servers each branch will have
+            # per user setup environment
+            - dev
+            - dev-apps # applications
+            - dev-resources # postgresql,redis,etc.
+            - dev-load-balancer # balance all traffic
+
+            # test environment for pre-production builds
+            - test
+            - test-apps
+            - test-resources
+            - test-load-balancer
+
+            # for production it could grow up
+            # but in reality we just use one server then scale it up
+            - prod
+            - prod-apps
+            - prod-resources
+            - prod-postgresql
+            - prod-redis
+            - prod-load-balancer
+        loop_prefix: ''
+        loop_items:
+          - server_name: 'tadam-arm'
+            server_private_network_name: '{{ project_name }}'
+
+- name: 'Base Ansible deployment and tunes'
+  hosts: dev, test, prod
+  remote_user: root
+  become_method: su
+
+  tasks:
+    - name: 'Setup Ansible Interpreter and libs'
+      ansible.builtin.include_role:
+        name: ansible
+
+    - name: 'Setup Btop monitor'
+      ansible.builtin.include_role:
+        name: btop
+
+    - name: 'Setup Base ports and tune'
+      ansible.builtin.include_role:
+        name: base
+
+- name: 'Resources deployment'
+  hosts:
+    - dev-resources
+    - test-resources
+    - prod-resources
+  remote_user: root
+  become_method: su
+  tasks:
+    - name: 'Setup Redis'
+      ansible.builtin.include_role:
+        name: redis
+
+    # generate for dev test prod
+    # possible for prod a couple of servers
+    # with backups etc.
+
+    - name: 'Setup Postgresql'
+      ansible.builtin.include_role:
+        name: postgresql
+      vars:
+        postgresql_users:
+          - some-app-user
+        postgresql_databases:
+          - name: some-app-db
+            user: some-app-user
+
+- name: 'Apps deployment'
+  hosts:
+    - dev-apps
+    - test-apps
+    - prod-apps
+  tags: apps
+  remote_user: root
+  become_method: su
+  tasks:
+    - name: "Tell subsequent tasks to use our deploy virtualenv"
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /opt/ansible/bin/python
+
+    - name: Set project envs, apps, branches
+      ansible.builtin.set_fact:
+        project_apps: *project-apps
+        project_envs: *project-envs
+        project_branches: *project-branches
+
+    - name: Transform apps and branches
+      ansible.builtin.set_fact:
+        apps: "{{ apps_transformed | from_yaml }}"
+      vars:
+        apps_transformed: |
+          {% for app_env in project_envs %}
+          {% if app_env == 'prod' %}
+          - app_env: 'prod'
+            app_branch: 'main'
+            apps:
+          {% for app in project_apps %}
+          {% for key, value in app.items() %}
+            {% if key not in 'app_nginx' %}
+            {% if loop.index == 1 -%}- {% else %}  {% endif %}{{ key }}: {% if value is number %}{{ value }}{% else %}'{{ value }}'{% endif %}
+            {% endif %}
+
+          {% endfor %}
+          {% endfor %}
+          {% else %}
+          {% for app_branch in project_branches %}
+          - app_env: '{{ app_env }}'
+            app_branch: '{{ app_branch }}'
+            apps:
+          {% for app in project_apps %}
+          {% for key, value in app.items() %}
+            {% if key not in 'app_nginx' %}
+            {% if loop.index == 1 -%}- {% else %}  {% endif %}{{ key }}: {% if value is number %}{{ value }}{% else %}'{{ value }}'{% endif %}
+            {% endif %}
+
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+
+    - name: Show apps structure
+      ansible.builtin.debug:
+        var: apps
+
+    - name: 'App deployment'
+      ansible.builtin.include_role:
+        name: better_roles
+      vars:
+        loop_role: '{{ item.role }}'
+        loop_vars:
+          app_env: '{{ item.app_env }}'
+          app_branch: '{{ item.app_branch }}'
+        loop_prefix: ''
+        loop_items: '{{ item.apps }}'
+      when: item.app_env + '-apps' in group_names
+      loop: '{{ apps }}'
+
+# TODO: use apps for nginx_hosts iteration
+# - name: Gogs server for managing repos
+#   hosts:
+#     - prod-apps
+#   remote_user: root
+#   become_method: su
+#   tasks:
+#     - name: Gogs git server deployment
+#       ansible.builtin.include_role:
+#         name: gogs
+#       vars:
+#         gogs_domain: 'blah.yarchik.com'
+#         gogs_port: 3001
+#         gogs_admin_name: 'yara'
+#         gogs_admin_email: 'morty.space@gmail.com'
+#         gogs_admin_password: 'zhjckfdyjrbfy73'
+
+- name: 'Load balancer configuration'
+  hosts:
+    - dev-load-balancer
+    - prod-load-balancer
+  tags:
+    - load-balancer
+  remote_user: root
+  become_method: su
+  tasks:
+    - name: "Tell subsequent tasks to use our deploy virtualenv"
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /opt/ansible/bin/python
+
+    - name: Set project envs, apps, branches
+      ansible.builtin.set_fact:
+        project_apps: *project-apps
+        project_envs: *project-envs
+        project_branches: *project-branches
+        project_domain_root: *project-domain-root
+
+    - name: Transform apps and branches
+      ansible.builtin.set_fact:
+        apps: "{{ apps_transformed | from_yaml }}"
+      vars:
+        apps_transformed: |
+          {% for app_env in project_envs %}
+          {% if app_env == 'prod' %}
+
+          {% for app in project_apps %}
+          - domain: '{{ app.app_name }}.{{ project_domain_root }}'
+          {% for key, value in app.app_nginx.items() %}
+            {{ key }}: {% if value is number %}{{ value }}{% else %}'{{ value }}'{% endif %}
+
+          {% endfor %}
+            upstream_host: 0.0.0.0
+            upstream_port: {{ app.app_port_offset + 40000 }}
+            upstream_instances: {{ app['app_instances'] }}
+          {% endfor %}
+
+          {% elif app_env == 'test' %}
+
+          {% for app_branch in project_branches %}
+          {% for app in project_apps %}
+          - domain: '{{ app_branch }}.{{ app.app_name }}.{{ project_domain_root }}'
+          {% for key, value in app.app_nginx.items() %}
+            {{ key }}: {% if value is number %}{{ value }}{% else %}'{{ value }}'{% endif %}
+
+          {% endfor %}
+            upstream_host: 0.0.0.0
+            upstream_port: {{ app.app_port_offset + 30000 }}
+            upstream_instances: {{ app['app_instances'] }}
+          {% endfor %}
+          {% endfor %}
+
+          {% else %}
+
+          {% for app_branch in project_branches %}
+          {% for app in project_apps %}
+          - domain: '{{ app_env }}.{{ app_branch }}.{{ app.app_name }}.{{ project_domain_root }}'
+          {% for key, value in app.app_nginx.items() %}
+            {{ key }}: {% if value is number %}{{ value }}{% else %}'{{ value }}'{% endif %}
+
+          {% endfor %}
+            upstream_host: 0.0.0.0
+            upstream_port: {{ app.app_port_offset + 20000 }}
+            upstream_instances: {{ app['app_instances'] }}
+          {% endfor %}
+          {% endfor %}
+
+          {% endif %}
+          {% endfor %}
+
+    - name: Show apps structure
+      ansible.builtin.debug:
+        var: apps
+
+    # - name: Nginx setup
+    #   ansible.builtin.include_role:
+    #     name: nginx
+    #   vars:
+    #     nginx_worker_processes: 2
+    #     nginx_certbot_email: *project-domain-certbot-email
+    #     nginx_dns_hetzner_enabled: true
+    #     nginx_dns_hetzner_api_key: 'dwtu2r9akwDnjexWusH10q8eMlrC000I'
+    #     nginx_apps_only_update: true
+    #     nginx_apps_project: *project-name
+    #     nginx_apps: '{{ apps }}'
+
+
+# different env types, dev, test, prod
+
+# dev -> auto reload stuff with all neded resources and fixtures
+# to proactively develop features/fix bugs/etc.
+
+# test -> run unit tests before deploy, thne production grade deploy
+# run integration tests if required
+
+# production -> main branch production deploy using build should
+# be very fast, just switch code for daemon
+
+# stack.yml -> all definition
+
+# servers.yml -> servers with different groups and base config
+# resources/<name>.yml -> db/cache/etc. deployment
+# apps/<name>.yml -> different settings for dev prod etc. if needed
+# inside app -> definition of app different settings for dev, test, prod
+# for dev it will be one db-name-{env}-{branch}
+# same for other resources requirements inside apps
+
+# apps -> different apps/python/golang/rust etc.
+# load-balancer.yml -> mapping apps to domains etc.
+
+# steps:
+# generate hosts.ini -> servers infrastructure
+# generate resources/<name>.yml (postgresql/postgresql-replica etc.)
+# generate apps/<name>.yml
+# deploy servers create/delete/update
+# deply resources (include lb) create/delete/update
+# deploy apps create/delete/update
+
+# first iter
+# app apps uses dbs/cache with per app-env-branch names
+# easy per app using 
+# second step all apps in user then resources on different servers
+# 

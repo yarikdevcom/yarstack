@@ -1,0 +1,168 @@
+---
+
+- name: 'Install and setup zsh for root'
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ gogs_user }}'
+
+# https://go.dev/doc/install/source
+# https://go.googlesource.com/go
+# TODO: move into role go-lang
+# TODO: install own go lang instead of deb package
+- name: Install build requirements
+  ansible.builtin.apt:
+    pkg: [
+      'make', 'build-essential', 'libssl-dev', 'zlib1g-dev',
+      'libbz2-dev', 'libreadline-dev', 'libsqlite3-dev',
+      'bison', 'git'
+    ]
+
+# if go lang avaialble from cache download
+# if gog available from cache use it
+
+- name: Check gog already exists
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.stat:
+    path: '{{ gogs_root_dir }}/gogs'
+  register: gogs_bin
+
+- name: Download Go-lang binary
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.get_url:
+    url: "https://go.dev/dl/go{{ gogs_go_version }}.linux-{{ ansible_architecture | replace('x86_64', 'amd64') }}.tar.gz"
+    dest: '~/golang-bin.tar.gz'
+    mode: '0644'
+
+- name: Unpack Go-lang distribution
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.unarchive:
+    remote_src: true
+    src: '~/golang-bin.tar.gz'
+    dest: '~/'
+
+# - name: Clone golang repo
+#   become: true
+#   become_user: '{{ gogs_user }}'
+#   ansible.builtin.git:
+#     repo: https://go.googlesource.com/go
+#     version: go1.21.0
+#     depth: 1
+#     dest: '/home/{{ gogs_user }}/go-lang-repo'
+#   when: not gogs_bin.stat.exists
+
+# - name: Create go dir
+#   become: true
+#   become_user: '{{ gogs_user }}'
+#   ansible.builtin.file:
+#     dest: '/home/{{ gogs_user }}/go'
+#     state: 'directory'
+
+# - name: Install go-lang for user
+#   become: true
+#   become_user: '{{ gogs_user }}'
+#   ansible.builtin.command:
+#     chdir: '/home/{{ gogs_user }}/go-lang-repo/src'
+#     cmd: './all.bash'
+#   environment: 
+#     GOROOT: '/home/{{ gogs_user }}/go'
+#   when: not gogs_bin.stat.exists
+
+# https://github.com/gogs/gogs/releases
+# add configs
+
+- name: Clone gogs repo
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.git:
+    repo: https://github.com/gogs/gogs.git
+    version: '{{ gogs_version }}'
+    depth: 1
+    dest: '{{ gogs_root_dir }}'
+  when: not gogs_bin.stat.exists
+
+- name: Build gogs for user
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.command:
+    chdir: '{{ gogs_root_dir }}'
+    cmd: '~/go/bin/go build -o gogs'
+  when: not gogs_bin.stat.exists
+
+- name: Create gogs conf dir
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.file:
+    dest: '{{ gogs_root_dir }}/custom/conf'
+    state: 'directory'
+
+- name: Copy config into gogs
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.template:
+    src: gogs.ini.j2
+    dest: '{{ gogs_root_dir }}/custom/conf/app.ini'
+
+- name: Deploy Postgresql per-user
+  ansible.builtin.include_role:
+    name: postgresql
+  vars:
+    postgresql_user: '{{ gogs_user }}'
+    postgresql_dest_dir_path: '/home/{{ gogs_user }}/postgresql'
+    postgresql_unix_only: true
+    postgresql_systemd_scope: 'user'
+    postgresql_users:
+      - 'gogs'
+    postgresql_dbs:
+      - name: 'gogs'
+        user: 'gogs'
+  when: gogs_database_deploy_postgresql
+
+- name: Create gogs admin user
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.command:
+    cmd: './gogs admin create-user --name {{ gogs_admin_name }} --password {{ gogs_admin_password }} --email {{ gogs_admin_email }} --admin'
+    chdir: '{{ gogs_root_dir }}'
+  ignore_errors: true
+  register: gogs_created_user
+  failed_when: "'user already exists' not in gogs_created_user.stderr and 'New user \"' not in gogs_created_user.stdout"
+
+- name: Create systemd user dir
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.file:
+    dest: '~/.config/systemd/user'
+    state: 'directory'
+
+- name: Copy systemd service configuration
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.template:
+    src: gogs.service.j2
+    dest: '~/.config/systemd/user/gogs.service'
+    mode: 0644
+
+- name: Get UID of gogs user
+  ansible.builtin.command: "id -u {{ gogs_user }}"
+  register: gogs_uid_result
+  changed_when: false
+
+- name: Set custom fact for gogs_uid
+  ansible.builtin.set_fact:
+    gogs_user_uid: "{{ gogs_uid_result.stdout }}"
+
+- name: Start gogs
+  become: true
+  become_user: '{{ gogs_user }}'
+  ansible.builtin.systemd:
+    scope: 'user'
+    name: gogs
+    enabled: true
+    daemon_reload: true
+    state: restarted
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ gogs_user_uid }}"

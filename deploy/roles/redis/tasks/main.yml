@@ -1,0 +1,199 @@
+---
+
+- name: Create user if not exists
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ redis_user }}'
+
+- name: Get Redis binary from cache
+  simplecache:
+    name: "{{ redis_cache_key }}"
+    dest: "{{ redis_dest_dir_path }}"
+    token: "blah"
+  register: cache
+
+- name: Install build requirements
+  ansible.builtin.apt:
+    pkg: [
+      'build-essential', 'sysfsutils', 'libsystemd-dev',
+      'libjemalloc-dev', 'tcl', 'lz4'
+    ]
+  when: not cache.exists
+
+- name: Remove old Redis build dir if exists
+  ansible.builtin.file:
+    path: '{{ redis_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Create Redis build dir
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.file:
+    path: '{{ redis_build_temp }}'
+    state: directory
+    recurse: true
+  when: not cache.exists
+
+- name: Download Redis distribution
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.get_url:
+    url: https://github.com/redis/redis/archive/{{ redis_version }}.tar.gz
+    dest: '{{ redis_build_temp }}/redis.tar.xz'
+    mode: '0644'
+  when: not cache.exists
+
+- name: Unpack Redis distribution
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.unarchive:
+    remote_src: true
+    src: '{{ redis_build_temp }}/redis.tar.xz'
+    dest: '{{ redis_build_temp }}'
+  when: not cache.exists
+
+- name: Remove old Redis executable
+  ansible.builtin.file:
+    path: '{{ redis_dest_dir_path }}'
+    state: absent
+  when: not cache.exists
+
+- name: Disable transparent hugepage
+  ansible.builtin.lineinfile:
+    path: /etc/sysfs.conf
+    line: kernel/mm/transparent_hugepage/enabled = never
+
+- name: Enable overcommit memory
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    line: vm.overcommit_memory=1
+
+- name: Increase maximum connections
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    line: net.core.somaxconn=65535
+
+- name: Increase fs.file-max
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    line: fs.file-max=100000
+
+- name: Increase tcp params
+  ansible.builtin.blockinfile:
+    path: /etc/sysctl.conf
+    content: |
+      net.ipv4.tcp_rmem = 4096 87380 8388608
+      net.ipv4.tcp_wmem = 4096 87380 8388608
+      net.core.rmem_max = 8388608
+      net.core.wmem_max = 8388608
+      net.core.netdev_max_backlog = 5000
+      net.ipv4.tcp_window_scaling = 1
+
+- name: Increase soft, hard limits
+  ansible.builtin.blockinfile:
+    path: /etc/security/limits.conf
+    content: |
+      * soft nofile 4096
+      * hard nofile 16384
+
+- name: Reload sysfsutils
+  ansible.builtin.systemd:
+    name: sysfsutils
+    enabled: true
+    force: true
+    state: restarted
+
+- name: Reload sysctl
+  register: result
+  changed_when: result.rc != 0
+  ansible.builtin.command: sysctl -p
+
+- name: Build Redis
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.command:
+    chdir: '{{ redis_build_temp }}/redis-{{ redis_version }}'
+    cmd: "make -j{{ ansible_processor_vcpus }} USE_SYSTEMD=yes MALLOC=jemalloc"
+    creates: 'src/redis-server'
+  when: not cache.exists
+
+- name: Change memefficiency
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.replace:
+    path: '{{ redis_build_temp }}/redis-{{ redis_version }}/tests/unit/memefficiency.tcl'
+    regexp: 'frag\ \<\ 1\.4}'
+    replace: 'frag < 1.6}'
+  when: redis_patch_memefficiency and not cache.exists
+
+- name: Check build
+  become: true
+  become_user: '{{ redis_user }}'
+  register: result
+  changed_when: result.rc != 0
+  ansible.builtin.command:
+    chdir: '{{ redis_build_temp }}/redis-{{ redis_version }}'
+    cmd: 'make test'
+  async: 1200
+  poll: 20
+  when: redis_test_build and not cache.exists
+
+- name: Install Redis
+  ansible.builtin.command:
+    chdir: '{{ redis_build_temp }}/redis-{{ redis_version }}'
+    cmd: 'make PREFIX={{ redis_dest_dir_path }} install'
+    creates: '{{ redis_bin_path }}/redis-server'
+  when: not cache.exists
+
+- name: Remove Redis build dir
+  ansible.builtin.file:
+    path: '{{ redis_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Set Redis binary cache
+  simplecache:
+    name: "{{ cache.name }}"
+    src: "{{ cache.dest }}"
+    token: "{{ cache.token }}"
+  when: not cache.exists
+
+- name: Create data directory
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.file:
+    path: '{{ redis_data_dir_path }}'
+    state: directory
+    recurse: true
+
+- name: Set server.conf configuration
+  become: true
+  become_user: '{{ redis_user }}'
+  ansible.builtin.template:
+    src: server.conf.j2
+    dest: '{{ redis_config_path }}'
+    mode: 0644
+
+- name: Copy systemd service configuration
+  ansible.builtin.template:
+    src: redis.service.j2
+    dest: /etc/systemd/system/redis.service
+    mode: 0644
+
+- name: Start Redis
+  ansible.builtin.systemd:
+    name: redis
+    enabled: true
+    daemon_reload: true
+    state: started
+
+- name: Benchmark
+  become: true
+  become_user: '{{ redis_user }}'
+  register: result
+  changed_when: result.rc != 0
+  ansible.builtin.command:
+    '{{ redis_bin_path }}/redis-benchmark -t SET,GET,INCR,ZSET,ZADD -c 100 -h 0.0.0.0 -n 1000000 -P 100 --csv'
+  when: redis_test_benchmark

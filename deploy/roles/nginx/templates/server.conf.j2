@@ -1,0 +1,77 @@
+user {{ nginx_user }} {{ nginx_user }};
+worker_processes {{ nginx_worker_processes }};
+error_log logs/error.log;
+pid logs/nginx.pid;
+worker_rlimit_nofile 100000;
+
+events {
+  worker_connections {{ nginx_worker_connections }};
+  multi_accept on;
+  accept_mutex off;
+}
+
+http {
+  include mime.types;
+
+  default_type application/octet-stream;
+  log_format main '$remote_addr - $remote_user [$time_local]  $status '
+    '"$request" $body_bytes_sent "$http_referer" '
+    '"$http_user_agent" "$http_x_forwarded_for"';
+  access_log logs/access.log main buffer=128k;
+
+  proxy_cache_path {{ nginx_data_dir_path }}/cache levels=1:2 keys_zone=hot_cache:10m max_size=1g inactive=60m use_temp_path=off;
+
+  sendfile on;
+  tcp_nopush on;
+  tcp_nodelay on;
+
+  aio threads;
+  client_body_timeout 10;
+  client_header_timeout 2;
+  keepalive_timeout 60;
+  send_timeout 10;
+
+  open_file_cache max=2000 inactive=20s;
+  open_file_cache_valid 60s;
+  open_file_cache_min_uses 5;
+  open_file_cache_errors off;
+
+  proxy_buffering on;
+  proxy_buffers 64 4k;
+  proxy_buffer_size 16k;
+  proxy_busy_buffers_size 24k;
+
+  gzip on;
+  gzip_disable "msie6";
+
+  gzip_vary on;
+  gzip_proxied any;
+  gzip_comp_level 6;
+  gzip_buffers 16 8k;
+  gzip_http_version 1.1;
+  gzip_min_length 256;
+  gzip_types
+    application/atom+xml
+    application/vnd.api+json
+    application/geo+json
+    application/javascript
+    application/x-javascript
+    application/json
+    application/ld+json
+    application/manifest+json
+    application/rdf+xml
+    application/rss+xml
+    application/xhtml+xml
+    application/xml
+    font/eot
+    font/otf
+    font/ttf
+    image/svg+xml
+    text/css
+    text/javascript
+    text/plain
+    text/xml;
+
+  include apps/*.conf;
+  include apps/*/*.conf;
+}

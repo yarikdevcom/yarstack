@@ -1,0 +1,20 @@
+---
+
+# https://www.postgresql.org/ftp/source/
+
+postgresql_version: '15.4'
+postgresql_user: 'postgres'
+postgresql_systemd_scope: 'system'
+postgresql_dest_dir_path: '/home/{{ postgresql_user }}/{{ postgresql_version }}'
+postgresql_bin_path: '{{ postgresql_dest_dir_path }}/bin'
+postgresql_data_dir_path: '/home/{{ postgresql_user }}/data'
+postgresql_build_temp: '/home/{{ postgresql_user }}/build-{{ postgresql_version }}'
+postgresql_locale: 'en_US.UTF-8'
+postgresql_port: 5432
+postgresql_listen: '0.0.0.0'
+postgresql_unix_socket: true
+postgresql_unix_socket_dir_path: '/home/{{ postgresql_user }}/unix'
+postgresql_unix_only: false
+postgresql_cache_key: "{{ postgresql_dest_dir_path | replace('/', '_') }}"
+postgresql_users: ['{{ postgresql_user }}']
+postgresql_dbs: []

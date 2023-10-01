@@ -1,0 +1,14 @@
+node_user: 'node'
+node_nvm_version: 'v0.39.4'
+node_version: 'v20.5.1'
+node_npm_version: '9.8.1'
+node_yarn_version: '1.22.19'
+
+# TODO: add own cache
+
+node_bin_dir_path: '/home/{{ node_user }}/.nvm/versions/node/{{ node_version }}/bin'
+node_run_bin_path: '{{ node_bin_dir_path }}/node'
+node_npm_bin_path: '{{ node_run_bin_path }} {{ node_bin_dir_path }}/npm'
+node_yarn_bin_path: '{{ node_run_bin_path }} {{ node_bin_dir_path }}/yarn'
+
+node_set_path_for_user: ''

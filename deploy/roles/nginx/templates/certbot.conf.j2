@@ -1,0 +1,17 @@
+server {
+    {% if item.item.domain | split('.') | length == 2 %}
+    server_name {{ item.item.domain }} www.{{ item.item.domain }};
+    {% else %}
+    server_name {{ item.item.domain }};
+    {% endif %}
+    listen 80;
+    listen [::]:80;
+
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+
+    location /.well-known/acme-challenge {
+      default_type "text/plain";
+      root {{ nginx_acme_dir_path }};
+    }
+}

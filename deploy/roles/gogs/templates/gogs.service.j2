@@ -1,0 +1,32 @@
+[Unit]
+Description=Gogs
+After=syslog.target
+After=network.target
+After=postgresql.service
+
+[Service]
+Type=simple
+# Modify these two values and uncomment them if you have
+# repos with lots of files and get an HTTP error 500 because
+# of that
+# LimitMEMLOCK=infinity
+# LimitNOFILE=65535
+# CPUWeight=1
+# CPUQuota=100%
+# IOWeight=20
+# CPUUsageNSec=10000
+# MemorySwapMax=0
+
+WorkingDirectory=/home/{{ gogs_user }}/app
+ExecStart=/home/{{ gogs_user }}/app/gogs web
+Restart=always
+RestartSec=1
+TimeoutSec=5
+Environment=USER={{ gogs_user }} HOME=/home/{{ gogs_user }}
+
+# Some distributions may not support these hardening directives. If you cannot start the service due
+# to an unknown option, comment out the ones not supported by your version of systemd.
+# ProtectSystem=full
+# PrivateDevices=yes
+# PrivateTmp=yes
+# NoNewPrivileges=true

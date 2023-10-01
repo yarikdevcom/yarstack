@@ -1,0 +1,80 @@
+- name: 'Install and setup zsh for {{ node_user }}'
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ node_user }}'
+
+# TODO: install from compiled sources
+- name: Create NVM temp dir
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.file:
+    path: '~/nvm-build-{{ node_nvm_version }}'
+    state: directory
+    mode: '0744'
+
+- name: Download NVM
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.get_url:
+    url: 'https://raw.githubusercontent.com/nvm-sh/nvm/{{ node_nvm_version }}/install.sh'
+    dest: '~/nvm-build-{{ node_nvm_version }}/install.sh'
+    mode: '0744'
+
+- name: Install NVM
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.command:
+    cmd: '~/nvm-build-{{ node_nvm_version }}/install.sh'
+
+- name: Remove NVM install file
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.file:
+    path: '~/nvm-build-{{ node_nvm_version }}'
+    state: absent
+
+- name: Install Node
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.command: 'zsh -ic "nvm install {{ node_version }}"'
+
+# update bin paths no reason to use zsh here
+
+- name: Install npm upgrade
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.command:
+    cmd: '{{ node_npm_bin_path }} install -i -g npm@{{ node_npm_version }}'
+
+- name: Install yarn
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.command:
+    cmd: '{{ node_npm_bin_path }} install -i -g yarn@{{ node_yarn_version }}'
+
+- name: Check yarn version
+  become: true
+  become_user: '{{ node_user }}'
+  ansible.builtin.command:
+    cmd: '{{ node_yarn_bin_path }} --version'
+
+- name: Add to user path
+  become: true
+  become_user: '{{ node_set_path_for_user }}'
+  ansible.builtin.lineinfile:
+    path: '/home/{{ node_set_path_for_user }}/.zshrc'
+    line: 'export PATH="{{ node_bin_dir_path }}:$PATH"'
+  when: node_set_path_for_user
+
+
+# give paths to node_user
+
+# - name: Change permissions NVM dest dir
+#   become: true
+#   become_user: '{{ node_user }}'
+#   ansible.builtin.file:
+#     path: '~/nvm'
+#     state: directory
+#     mode: '0744'
+#     recurse: true

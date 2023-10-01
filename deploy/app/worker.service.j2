@@ -1,0 +1,24 @@
+[Unit]
+Description=App worker
+After=network.target
+StartLimitIntervalSec=1
+
+[Service]
+Type=simple
+User={{ app_owner }}
+
+{% if app_reload %}
+ExecStart={{ app_source_dir_path }}/backend/.venv/bin/arq -v app.worker.main --watch .
+Restart=on-failure
+RestartSec=1s
+{% else %}
+ExecStart={{ app_source_dir_path }}/backend/.venv/bin/arq app.worker.main
+{% endif %}
+
+TimeoutSec=5
+WorkingDirectory={{ app_source_dir_path }}/backend
+Environment="APP__DB__URL={{ app_postgresql_url }}"
+Environment="APP__REDIS__STORAGE__URL={{ app_redis_url }}"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+backend/** filter=git-crypt-backend diff=git-crypt-backend
+frontend/** filter=git-crypt-frontend diff=git-crypt-frontend
+deploy/** filter=git-crypt-deploy diff=git-crypt-deploy
+tests/** filter=git-crypt-tests diff=git-crypt-tests

@@ -1,0 +1,129 @@
+---
+
+name: 'myproject'
+envs: [dev, prod, test]
+deployments:
+  main: [prod]
+  branch1: [dev, test]
+domain: 'yarchik.com'
+email: 'morty.space@gmail.com'
+
+
+hosts:
+  - name: test
+    provider:
+      hetzner:
+        type: 'cax21'
+    envs: ['*']
+    deployments: ['*']
+    apps: ['*']
+
+  # - host_provider: 'hardware'
+  #   host_ip: "213.93.200.128"
+  #   host_domain: 'ryzen5700g.yarchik.com'
+  #   server_envs: [dev, test]
+  #   server_apps: ['*']
+
+apps:
+  - name: base
+    tasks:
+    - name: 'Setup Ansible Interpreter and libs'
+      ansible.builtin.include_role:
+        name: ansible
+
+    - name: 'Setup Btop monitor'
+      ansible.builtin.include_role:
+        name: btop
+
+    - name: 'Setup Base ports and tune'
+      ansible.builtin.include_role:
+        name: base
+
+  - name: backend
+    role: app
+    vars:
+      app_name: 'some-backend'
+      app_code_repo: '... blah git ...'
+      app_code_version: 'v3.2.1'
+      app_build_python: true
+      app_instances: 2
+    
+    overrides:
+      - envs: [dev]
+        vars:
+          app_instances: 1
+          app_code_version: 'dev'
+          app_code_rsync_dir: '../../../../project/'
+
+    requires:
+      db:
+        vars:
+          postgresql_users: ['backend']
+          postgresql_dbs: ['blah1', 'blah2', 'blah3']
+      cache:
+        vars:
+          redis_dbs: ['cache', 'sessions']
+
+  - name: frontend
+    role: app
+    vars:
+      app_name: 'frontend'
+      app_code_rsync_dir: '../../../../frontend/'
+      app_build_node: true
+      app_instances: 2
+
+    load_balancer:
+      proxy_location: '/'
+      https: true
+
+    overrides:
+      dev:
+        vars:
+          app_instances: 1
+        load_balancer:
+          websocket_location: '/__ws_reload__'
+
+  - name: git
+    role: gogs
+    port: gogs_port
+
+    vars:
+      gogs_domain: 'blah.yarchik.com'
+      # gogs_port: 7500
+      gogs_port: 'port'
+      gogs_admin_name: 'yara'
+      gogs_admin_email: 'morty.space@gmail.com'
+      gogs_admin_password: 'zhjckfdyjrbfy73'
+
+    deployments:
+      main: ['prod']
+    
+    requires:
+      load-balancer:
+        vars:
+          apps:
+            - domain: '{deployment}.{env}.{name}'
+              proxy_location: '/'
+              https: true
+
+  - name: postgresql
+    role: postgresql
+    vars:
+      postgresql_role: 'main'
+      postgresql_version: '15.3'
+
+  - name: postgresql-replica
+    role: postgresql
+    vars:
+      postgresql_version: '15.3'
+      postgresql_replica_to: 'main'
+
+  - name: redis
+    role: redis
+    vars:
+      redis_version: '7.2.1'
+      redis_maxmemory: '256mb'
+      redis_databases: 100
+
+  - name: nginx
+    role: nginx

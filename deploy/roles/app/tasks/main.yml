@@ -1,0 +1,249 @@
+---
+
+# example of basic flow
+# dev.blah.project.com -> dev-blah-project-name (app1-python-worker, app2-golang-bin, app3)
+# blah.project.com -> blah-project-name
+# project.com -> prod-project-name
+
+
+- name: Generate user name for dev branch env
+  ansible.builtin.set_fact:
+    app_user: '{{ app_env }}-{{ app_branch }}-{{ app_project }}'
+  when: not app_user and app_env == 'dev'
+
+- name: Generate user name for build branch env
+  ansible.builtin.set_fact:
+    app_user: '{{ app_branch }}-{{ app_project }}'
+  when: not app_user and app_env == 'test'
+
+- name: Generate user name for prod env
+  ansible.builtin.set_fact:
+    app_user: '{{ app_project }}'
+    # app_branch: "{{ app_branch | default('main') }}"
+  when: not app_user and app_env == 'prod'
+
+- name: Get port from env
+  ansible.builtin.set_fact:
+    app_port: |
+      {%- if app_env == 'dev' -%}{{ app_port_offset | int + app_dev_port | int }}{%- endif -%}
+      {%- if app_env == 'test' -%}{{ app_port_offset | int + app_test_port | int }}{%- endif -%}
+      {%- if app_env == 'prod' -%}{{ app_port_offset | int + app_prod_port | int }}{%- endif -%}
+  when: app_port_offset and not app_port
+
+- name: Get port from env
+  ansible.builtin.set_fact:
+    app_port: '{{ app_port | int }}'
+
+- name: Create user if not exists
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ app_user }}'
+
+- name: Update packages
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Sync code using rsync
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.posix.synchronize:
+    rsync_opts: '{{ app_code_rsync_args }}'
+    src: '{{ app_code_rsync_dir }}'
+    dest: '{{ app_code_dir_path }}'
+  when: app_code_rsync_dir
+
+- name: Sync code using git
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.git:
+    repo: '{{ app_code_repo }}'
+    force: true
+    version: '{{ app_version }}'
+    dest: '{{ app_code_dir_path }}'
+  when: not app_code_rsync_dir
+
+- name: Change owner
+  ansible.builtin.file:
+    path: '{{ app_code_dir_path }}'
+    recurse: true
+    owner: '{{ app_user }}'
+    group: '{{ app_user }}'
+
+- name: Copy env config file
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.template:
+    src: env.j2
+    dest: '{{ app_code_dir_path }}/.env'
+    mode: 0644
+
+# TODO: generate env file for configuration
+
+- name: Install Python
+  ansible.builtin.include_role:
+    name: python
+  vars:
+    python_version: '{{ app_python_version }}'
+    python_set_path_for_user: '{{ app_user }}'
+    python_poetry_version: '{{ app_python_poetry_version }}'
+    python_dest_dir_path: '{{ app_python_dest_dir_path }}'
+  when: app_build_python
+
+- name: Install Node
+  ansible.builtin.include_role:
+    name: node
+  vars:
+    node_user: '{{ app_node_user }}'
+    node_set_path_for_user: '{{ app_user }}'
+    node_nvm_version: '{{ app_node_nvm_version }}'
+    node_version: '{{ app_node_version }}'
+    node_npm_version: '{{ app_node_npm_version }}'
+    node_yarn_version: '{{ app_node_yarn_version }}'
+    node_bin_dir_path: '{{ app_node_bin_dir_path }}'
+    node_npm_bin_path: '{{ app_node_npm_bin_path }}'
+    node_yarn_bin_path: '{{ app_node_yarn_bin_path }}'
+  when: app_build_node
+
+- name: Set build and run arguments if Node
+  ansible.builtin.set_fact:
+    app_unit_test_install: '{{ app_node_unit_test_install }}'
+    app_unit_test_build: '{{ app_node_unit_test_build }}'
+    app_unit_test_run: '{{ app_node_unit_test_run }}'
+    app_dev_install: '{{ app_node_dev_install }}'
+    app_dev_build: '{{ app_node_dev_build }}'
+    app_dev_run: '{{ app_node_dev_run }}'
+    app_install: '{{ app_node_install }}'
+    app_build: '{{ app_node_build }}'
+    app_run: '{{ app_node_run }}'
+  when: app_commands_node
+
+- name: Set build and run arguments for Python
+  ansible.builtin.set_fact:
+    app_unit_test_install: '{{ app_python_unit_test_install }}'
+    app_unit_test_build: '{{ app_python_unit_test_build }}'
+    app_unit_test_run: '{{ app_python_unit_test_run }}'
+    app_dev_install: '{{ app_python_dev_install }}'
+    app_dev_build: '{{ app_python_dev_build }}'
+    app_dev_run: '{{ app_python_dev_run }}'
+    app_install: '{{ app_python_install }}'
+    app_build: '{{ app_python_build }}'
+    app_run: '{{ app_python_run }}'
+  when: app_commands_python
+
+- name: Install for unit-test run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_unit_test_install }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_unit_test_install and app_env == 'test'
+
+- name: Build for unit-test run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_unit_test_build }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_unit_test_build and app_env == 'test'
+
+- name: Run unit-tests
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_unit_test_run }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: test_result
+  changed_when: test_result.rc != 0
+  when: app_unit_test_run and app_env == 'test'
+
+- name: Install for dev run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_dev_install }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_dev_install and app_env == 'dev'
+
+- name: Build for dev run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_dev_build }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_dev_build and app_env == 'dev'
+
+- name: Set dev-run command
+  ansible.builtin.set_fact:
+    app_run: '{{ app_dev_run }}'
+  when: app_env == 'dev'
+
+- name: Install for run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_install }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_install and app_env != 'dev'
+
+- name: Build for run
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.command:
+    cmd: '{{ app_build }}'
+    chdir: '{{ app_code_dir_path }}'
+  register: install_result
+  changed_when: install_result.rc != 0
+  when: app_build and app_env != 'dev'
+
+- name: Get UID of app user
+  ansible.builtin.command: "id -u {{ app_user }}"
+  register: app_uid_result
+  changed_when: false
+
+- name: Set custom fact for app_uid_result
+  ansible.builtin.set_fact:
+    app_user_uid: "{{ app_uid_result.stdout }}"
+
+- name: Create systemd user dir
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.file:
+    dest: '~/.config/systemd/user'
+    state: 'directory'
+    mode: 0744
+
+- name: Copy systemd service configuration
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.template:
+    src: app.service.j2
+    dest: '~/.config/systemd/user/{{ app_name }}.service'
+    mode: 0644
+
+- name: 'Start {{ app_name }}'
+  become: true
+  become_user: '{{ app_user }}'
+  ansible.builtin.systemd:
+    scope: 'user'
+    name: '{{ app_name }}'
+    enabled: true
+    daemon_reload: true
+    state: restarted
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ app_user_uid }}"
+
+- name: Generate user name for dev branch env
+  ansible.builtin.set_fact:
+    app_user: ''
+    app_port: null

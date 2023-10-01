@@ -1,0 +1,19 @@
+---
+
+# https://redis.io/download/
+
+redis_version: '7.2.1'
+redis_user: 'redis'
+redis_dest_dir_path: '/home/{{ redis_user }}/{{ redis_version }}'
+redis_bin_path: '{{ redis_dest_dir_path }}/bin'
+redis_data_dir_path: /home/{{ redis_user }}/data
+redis_build_temp: '/home/{{ redis_user }}/build-{{ redis_version }}'
+redis_config_path: '{{ redis_data_dir_path }}/server.conf'
+redis_port: 6379
+redis_listen: '0.0.0.0'
+redis_maxmemory: '128mb'
+redis_databases: 200
+redis_patch_memefficiency: false
+redis_test_build: true
+redis_test_benchmark: true
+redis_cache_key: "redis_{{ redis_version }}_mem_{{ redis_patch_memefficiency }}"

@@ -1,0 +1,42 @@
+---
+- name: Geekbench 5 test run
+  hosts: roy
+  remote_user: root
+  become_method: su
+  vars:
+    geekbench_version: 'Geekbench-5.4.5-Linux'
+    # if arch arm TODO: add auto guess
+    # geekbench_version: 'Geekbench-5.4.0-LinuxARMPreview'
+  tasks:
+    - name: Download Geekbench distribution
+      ansible.builtin.get_url:
+        url: https://cdn.geekbench.com/{{ geekbench_version }}.tar.gz
+        dest: './gb.tar.xz'
+        mode: '0644'
+
+    - name: Unpack Geekbench distribution
+      ansible.builtin.unarchive:
+        remote_src: true
+        src: './gb.tar.xz'
+        dest: './'
+
+    - name: Remove archive
+      ansible.builtin.file:
+        path: './gb.tar.xz'
+        state: absent
+
+    - name: Run Geekbench
+      ansible.builtin.command:
+        chdir: './{{ geekbench_version }}'
+        cmd: './geekbench5'
+      register: results
+      changed_when: results.rc != 0
+
+    - name: Display geekbench
+      ansible.builtin.debug:
+        msg: '{{ results }}'
+
+    - name: Remove downloaded distribution
+      ansible.builtin.file:
+        path: './{{ geekbench_version }}'
+        state: absent

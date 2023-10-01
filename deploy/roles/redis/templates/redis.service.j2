@@ -1,0 +1,17 @@
+[Unit]
+Description=Redis In-Memory Data Store
+After=network.target
+
+[Service]
+Type=notify
+User={{ redis_user }}
+ExecStart={{ redis_bin_path }}/redis-server {{ redis_config_path }}
+ExecStop={{ redis_bin_path }}/redis-cli shutdown
+TimeoutStartSec=15s
+TieoutStopSec=15s
+RestartSec=15s
+Restart=always
+LimitNOFILE=11000
+
+[Install]
+WantedBy=multi-user.target

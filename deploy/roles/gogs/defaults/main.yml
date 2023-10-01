@@ -1,0 +1,29 @@
+gogs_user: 'gogs'
+gogs_version: 'v0.13.0'
+gogs_go_version: '1.21.0'
+gogs_root_dir: '/home/{{ gogs_user }}/app'
+gogs_brand_name: 'Gogs'
+gogs_domain: ''
+gogs_port: 3000
+gogs_run_mode: 'prod'
+gogs_protocol: 'http'
+gogs_addr: '0.0.0.0'
+gogs_load_assets_from_disk: false
+gogs_repository_root: '/home/{{ gogs_user }}/repos'
+gogs_repository_upload_enabled: false
+gogs_database_deploy_postgresql: true
+gogs_database_type: 'postgres'
+gogs_database_schema: 'public'
+gogs_database_host: '/home/{{ gogs_user }}/unix'
+gogs_database_name: 'gogs'
+gogs_database_user: 'gogs'
+gogs_database_password: 'gogs'
+gogs_database_max_open_conns: 10
+gogs_database_max_idle_conns: 2
+gogs_show_install_page: false
+gogs_secret_key: '63e_QhCQ-coMF4Y6AR7rJBnV9a_5bxRgONsZ3W1rebk'
+gogs_session_provider: 'file'
+gogs_session_cookie_secure: true
+gogs_disable_gravatar: true
+gogs_disable_registration: true
+gogs_disable_http_git: true

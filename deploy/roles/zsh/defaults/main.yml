@@ -1,0 +1,6 @@
+---
+
+zsh_user: ''
+zsh_user_home_path: '/home/{{ zsh_user }}'
+zsh_user_ssh_keys: []
+zsh_user_groups: []

@@ -1,0 +1,418 @@
+---
+
+- name: Create owner user if not exists
+  ansible.builtin.include_role:
+    name: zsh
+  vars:
+    zsh_user: '{{ nginx_user }}'
+
+- name: Create Hetzner DNS Zone
+  ansible.builtin.uri:
+    url: "https://dns.hetzner.com/api/v1/zones"
+    method: POST
+    headers:
+      Auth-API-Token: '{{ nginx_dns_hetzner_api_key }}'
+    body_format: json
+    body:
+      name: "{{ item.domain | split('.') | list_slice(-2, -1) | join('.') }}.{{ item.domain | split('.') | last }}"
+      ttl: 300
+    status_code: 200, 422
+  loop: '{{ nginx_apps }}'
+  when: nginx_dns_hetzner_enabled
+
+- name: Retrieve the A records
+  community.dns.hetzner_dns_record_set_info:
+    zone: "{{ item.domain | split('.') | list_slice(-2, -1) | join('.') }}.{{ item.domain | split('.') | last }}"
+    record: '{{ item.domain }}'
+    type: A
+    hetzner_token: '{{ nginx_dns_hetzner_api_key }}'
+  register: dns_records
+  loop: '{{ nginx_apps }}'
+  when: nginx_dns_hetzner_enabled
+
+- name: Delete A records using the results
+  community.dns.hetzner_dns_record_set:
+    state: absent
+    zone: "{{ item.invocation.module_args.zone_name }}"
+    record: "{{ item.set.record }}"
+    ttl: "{{ item.set.ttl }}"
+    type: "{{ item.set.type }}"
+    value: "{{ item.set.value }}"
+    hetzner_token: '{{ nginx_dns_hetzner_api_key }}'
+  loop: '{{ dns_records.results }}'
+  when: item.set and item.set.record != item.item.domain
+
+- name: Add ipv4 A records to host
+  community.dns.hetzner_dns_record:
+    hetzner_token: '{{ nginx_dns_hetzner_api_key }}'
+    state: present
+    zone_name: "{{ item.domain | split('.') | list_slice(-2, -1) | join('.') }}.{{ item.domain | split('.') | last }}"
+    type: A
+    record: '{{ item.domain }}'
+    ttl: 300
+    value: '{{ ansible_default_ipv4.address }}'
+  loop: '{{ nginx_apps }}'
+  when: nginx_dns_hetzner_enabled
+
+- name: Get Nginx bin from cache
+  simplecache:
+    name: "{{ nginx_cache_key }}"
+    dest: "{{ nginx_dest_dir_path }}"
+    token: "blah"
+  register: cache
+
+- name: Update packages
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Install build requirements
+  ansible.builtin.apt:
+    pkg: [
+      'build-essential', 'autotools-dev', 'libexpat-dev',
+      'libgd-dev', 'libgeoip-dev', 'liblua5.1-0-dev',
+      'libmhash-dev', 'libpam0g-dev', 'libperl-dev', 'apache2-utils',
+      'libxslt1-dev', 'ccache', 'certbot'
+    ]
+
+- name: Remove old Nginx build dir if exists
+  ansible.builtin.file:
+    path: '{{ nginx_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Create Nginx build dir
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.file:
+    path: '{{ nginx_build_temp }}'
+    state: directory
+    recurse: true
+  when: not cache.exists
+
+- name: Remove old dest dir
+  ansible.builtin.file:
+    path: '{{ nginx_dest_dir_path }}'
+    state: absent
+  when: not cache.exists
+
+- name: Download Nginx distribution packages
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.get_url:
+    url: '{{ item.url }}'
+    dest: '{{ nginx_build_temp }}/{{ item.name }}'
+    mode: '0644'
+  loop: '{{ nginx_packages }}'
+  when: not cache.exists
+
+- name: Unpack Nginx distribution packages
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.unarchive:
+    remote_src: true
+    src: '{{ nginx_build_temp }}/{{ item.name }}'
+    dest: '{{ nginx_build_temp }}'
+  loop: '{{ nginx_packages }}'
+  when: not cache.exists
+
+- name: Configure Build
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.command:
+    chdir: '{{ nginx_build_temp }}/nginx-{{ nginx_version }}'
+    cmd:
+      ./configure
+      --prefix={{ nginx_dest_dir_path }}
+      --user={{ nginx_user }}
+      --group={{ nginx_user }}
+      --with-pcre=../pcre2-{{ nginx_pcre2_version }}
+      --with-zlib=../zlib-{{ nginx_zlib_version }}
+      --with-openssl=../openssl-{{ nginx_openssl_version }}
+      --with-openssl-opt="enable-tls1_2"
+      --with-http_ssl_module
+      --with-http_v2_module
+      --with-threads
+      --with-file-aio
+      --with-http_realip_module
+      --with-http_gzip_static_module
+      --with-http_stub_status_module
+      --with-http_slice_module
+      --with-stream=dynamic
+      --with-stream_ssl_module
+      --with-stream_realip_module
+      --with-stream_geoip_module=dynamic
+      --with-pcre-jit
+      --with-ipv6
+      --with-http_sub_module
+      --with-http_addition_module
+      --with-http_auth_request_module
+      --with-http_secure_link_module
+      --with-http_degradation_module
+    creates: '{{ nginx_build_temp }}/Makefile'
+  when: not cache.exists
+
+- name: Build Nginx
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.command:
+    chdir: '{{ nginx_build_temp }}/nginx-{{ nginx_version }}'
+    cmd: 'make -j {{ ansible_processor_vcpus }}'
+    creates: 'objs/nginx'
+  when: not cache.exists
+
+- name: Install Nginx
+  ansible.builtin.command:
+    chdir: '{{ nginx_build_temp }}/nginx-{{ nginx_version }}'
+    cmd: 'make install'
+    creates: '{{ nginx_build_temp }}/build/sbin/nginx'
+  when: not cache.exists
+
+- name: Check Nginx data dir exists
+  ansible.builtin.stat:
+    path: '{{ nginx_data_dir_path }}'
+  register: nginx_data_dir
+
+- name: Copy default config files
+  ansible.builtin.command: 'cp -r {{ nginx_dest_dir_path }} {{ nginx_data_dir_path }}'
+  when: not nginx_data_dir.stat.exists
+
+- name: Change owner of config files
+  ansible.builtin.file:
+    path: '{{ nginx_data_dir_path }}'
+    recurse: true
+    owner: '{{ nginx_user }}'
+    group: '{{ nginx_user }}'
+
+- name: Remove binary from configuration dir
+  ansible.builtin.file:
+    path: '{{ nginx_data_dir_path }}/sbin'
+    state: absent
+  when: not nginx_data_dir.stat.exists
+
+- name: Remove Nginx build dir
+  ansible.builtin.file:
+    path: '{{ nginx_build_temp }}'
+    state: absent
+  when: not cache.exists
+
+- name: Set cache for build
+  simplecache:
+    name: "{{ cache.name }}"
+    src: "{{ cache.dest }}"
+    token: "{{ cache.token }}"
+  when: not cache.exists
+
+- name: Set nginx.conf configuration
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.template:
+    src: server.conf.j2
+    dest: '{{ nginx_data_dir_path }}/conf/nginx.conf'
+    mode: 0644
+
+- name: Create dir for Nginx app server configs
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.file:
+    path: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}'
+    state: directory
+    recurse: true
+
+- name: Set list of files to be synced from apps
+  ansible.builtin.set_fact:
+    allowed_apps_files: "[{% for app in nginx_apps %}'{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project}}/{{ app.domain }}.conf',{% endfor %}]"
+
+- name: Find all files in the target directory
+  ansible.builtin.find:
+    paths: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}'
+    file_type: file
+  register: all_apps_files
+
+- name: Identify files to be removed
+  ansible.builtin.set_fact:
+    apps_files_to_remove: "{{ all_apps_files.files | map(attribute='path') | difference(allowed_apps_files) }}"
+
+- name: Remove files not in the allowed list
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ apps_files_to_remove }}"
+
+- name: Create dir for Nginx acme certbot verifications
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.file:
+    path: '{{ nginx_acme_dir_path }}'
+    state: directory
+
+- name: Create dir for Nginx certs
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.file:
+    path: '{{ nginx_certs_dir_path }}/{{ item.domain }}'
+    state: directory
+    recurse: true
+  with_items: "{{ nginx_apps }}"
+
+- name: Check ssl privkey.pem certs if exists
+  ansible.builtin.stat:
+    path: '{{ nginx_certs_dir_path }}/{{ item.domain }}/privkey.pem'
+  register: nginx_certs_privkeys
+  with_items: "{{ nginx_apps }}"
+
+- name: Get cache for certificates
+  simplecache:
+    name: "{{ item.item.domain }}_ssl_keys"
+    dest: '{{ nginx_certs_dir_path }}/{{ item.item.domain }}'
+    token: "blah"
+    use_arch: false
+  when: not item.stat.exists and item.item.https
+  loop: "{{ nginx_certs_privkeys.results }}"
+  register: ssl_cache
+
+- name: Check app confs exists
+  ansible.builtin.stat:
+    path: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}/{{ item.domain }}.conf'
+  register: nginx_app_confs
+  with_items: "{{ nginx_apps }}"
+
+- name: Sync domains deploy configurations
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.template:
+    src: app.conf.j2
+    dest: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}/{{ item.item.domain }}.conf'
+    mode: 0644
+  with_items: '{{ nginx_apps }}'
+  loop: '{{ nginx_app_confs.results }}'
+
+- name: Sync domain certbot first deploy configurations if no conf
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.template:
+    src: certbot.conf.j2
+    dest: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}/{{ item.item.domain }}.conf'
+    mode: 0644
+  loop: '{{ nginx_app_confs.results }}'
+  when: not item.stat.exists and item.item.https
+
+- name: Sync domain certbot first deploy configurations if no conf
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.template:
+    src: certbot.conf.j2
+    dest: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}/{{ item.item.domain }}.conf'
+    mode: 0644
+  loop: '{{ nginx_certs_privkeys.results }}'
+  when: not item.stat.exists and item.item.https
+
+- name: Copy systemd service configuration
+  ansible.builtin.template:
+    src: nginx.service.j2
+    dest: /etc/systemd/system/nginx.service
+    mode: 0644
+
+- name: Start Nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    daemon_reload: true
+    state: started
+
+- name: Reload Nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+- name: Get Certbot certificates
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.command:
+    certbot certonly --force-renewal --agree-tos --non-interactive
+    --config-dir {{ nginx_certbot_dir_path }}/config
+    --work-dir {{ nginx_certbot_dir_path }}/workdir
+    --logs-dir {{ nginx_certbot_dir_path }}/logs
+    --webroot -w {{ nginx_acme_dir_path }}
+    -d {{ item.item.domain }} {{ '-d www.' + item.item.domain if item.item.domain | split('.') | length == 2 else '' }}
+    -m {{ nginx_certbot_email }}
+  loop: '{{ nginx_certs_privkeys.results }}'
+  when: not item.stat.exists and item.item.https
+
+- name: Copy certs to nginx certs dir
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.command: "cp -rL {{ nginx_certbot_dir_path }}/config/live/{{ item.item.domain }} {{ nginx_certs_dir_path }}"
+  loop: '{{ nginx_certs_privkeys.results }}'
+  when: not item.stat.exists and item.item.https
+
+- name: Delete contents of certbot dir
+  ansible.builtin.file:
+    path: "{{ nginx_certbot_dir_path }}"
+    state: absent
+
+#   TODO: iter certbot cert max date for
+# - name: Get ssl cert last dates
+#   ansible.builtin.command:
+#     'openssl x509 -enddate -noout -in {{ nginx_certbot_dir_path }}/config/live/{{ item.domain }}/cert.pem'
+#   with_items: "{{ nginx_apps }}"
+#   when: item.https
+#   register: nginx_certbot_expire_dates
+
+# - name: Format ssl cert last dates
+#   with_items: "{{ nginx_apps }}"
+#   when: item.https
+#   register: nginx_certbot_expire_dates
+
+# - name: Debug ssl
+#   ansible.builtin.debug:
+#     msg: '{{ nginx_certbot_expire_dates }}'
+
+# - name: Create user with password for basic auth envs (dev, live)
+#   become: true
+#   become_user: '{{ nginx_user }}'
+#   ansible.builtin.command:
+#     cmd: 'htpasswd -cb {{ nginx_data_dir_path }}/.htpasswd {{ nginx_auth_user.name }} {{ nginx_auth_user.password }}'
+#     creates: '{{ nginx_data_dir_path }}/.htpasswd'
+
+- name: Sync domains deploy configurations after cert was generated
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.template:
+    src: app.conf.j2
+    dest: '{{ nginx_data_dir_path }}/conf/apps/{{ nginx_apps_project }}/{{ item.item.domain }}.conf'
+    mode: 0644
+  loop: '{{ nginx_app_confs.results }}'
+
+- name: Check dhparam configs
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.stat:
+    path: '{{ nginx_certs_dir_path }}/{{ item.domain }}/dhparam.pem'
+  with_items: "{{ nginx_apps }}"
+  register: nginx_certbot_dhparams
+
+- name: Create dhparam configs if needed
+  become: true
+  become_user: '{{ nginx_user }}'
+  ansible.builtin.command:
+    cmd: 'openssl dhparam -out {{ nginx_certs_dir_path }}/{{ item.item.domain }}/dhparam.pem 2048'
+    creates: '{{ nginx_certs_dir_path }}/{{ item.item.domain }}/dhparam.pem'
+  when: not item.stat.exists
+  with_items: "{{ nginx_certbot_dhparams.results }}"
+
+- name: Set cache for ssl certificates
+  simplecache:
+    name: "{{ item.domain }}_ssl_keys"
+    src: '{{ nginx_certs_dir_path }}/{{ item.domain }}'
+    token: "blah"
+    use_arch: false
+    ignore_not_existing: true
+  when: item.https
+  with_items: "{{ nginx_apps }}"
+
+- name: Reload Nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    daemon_reload: true
+    state: reloaded

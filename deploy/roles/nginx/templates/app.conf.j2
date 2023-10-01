@@ -1,0 +1,167 @@
+# generated 2022-10-25, Mozilla Guideline v5.6, nginx 1.23.2, OpenSSL 1.1.1q, modern configuration
+# https://ssl-config.mozilla.org/#server=nginx&version=1.23.2&config=modern&openssl=1.1.1q&guideline=5.6
+
+{% macro ssl_https_certs() -%}
+  server_tokens off;
+  add_header X-XSS-Protection "1; mode=block";
+  add_header X-Content-Type-Options nosniff;
+  ssl_certificate {{ nginx_certs_dir_path }}/{{ item.item.domain }}/fullchain.pem;
+  ssl_certificate_key {{ nginx_certs_dir_path }}/{{ item.item.domain }}/privkey.pem;
+  ssl_trusted_certificate {{ nginx_certs_dir_path }}/{{ item.item.domain }}/chain.pem;
+  ssl_dhparam {{ nginx_certs_dir_path }}/{{ item.item.domain }}/dhparam.pem;
+
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:MozSSL:10m;  # about 40000 sessions
+  ssl_session_tickets off;
+
+  # modern configuration
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+  ssl_prefer_server_ciphers off;
+
+  # HSTS (ngx_http_headers_module is required) (63072000 seconds)
+  add_header Strict-Transport-Security "max-age=63072000" always;
+
+  # OCSP stapling
+  ssl_stapling on;
+  ssl_stapling_verify on;
+{%- endmacro %}
+
+{% if item.item.https %}
+# reiderct all http > https
+server {
+  {% if item.item.domain | split('.') | length == 2 %}
+  server_name {{ item.item.domain }} www.{{ item.item.domain }};
+  {% else %}
+  server_name {{ item.item.domain }};
+  {% endif %}
+  listen 80;
+  listen [::]:80;
+
+  location / {
+      return 301 https://{{ item.item.domain }}$request_uri;
+  }
+}
+{% endif %}
+
+{% if item.item.domain | split('.') | length == 2 %}
+# redirect www.domain -> no www
+server {
+  server_name www.{{ item.item.domain }};
+  {% if item.item.https %}
+  listen 443 ssl http2;
+  listen [::]:443 ssl http2;
+  {{ ssl_https_certs() }}
+  {% else %}
+  listen 80;
+  listen [::]:80;
+  {% endif %}
+
+  return 301 http{% if item.item.https %}s{% endif %}://{{ item.item.domain }}$request_uri;
+}
+{% endif %}
+
+# define upstreams
+upstream {{ item.item.domain.replace('.', '_') }}_upstreams {
+  {% for instance in range(item.item.upstream_instances | int) %}
+  server {{ item.item.upstream_host }}:{{ item.item.upstream_port + instance }};
+  {% endfor %}
+}
+
+map $http_upgrade $connection_upgrade {
+  default Upgrade;
+  '' close;
+}
+
+server {
+  server_name {{ item.item.domain }};
+  {% if item.item.https %}
+  listen 443 ssl http2;
+  listen [::]:443 ssl http2;
+  {{ ssl_https_certs() }}
+  {% else %}
+  listen 80;
+  listen [::]:80;
+  {% endif %}
+
+  # replace with the IP address of your resolver
+  resolver 1.1.1.1 8.8.8.8 valid=300s;
+  resolver_timeout 5s;
+
+  # cache
+  proxy_cache hot_cache;
+
+  {% if item.item.websocket_location | default(False) %}
+  location {{ item.item.websocket_location }} {
+    proxy_redirect off;
+    proxy_buffering off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_http_version 1.1;
+    proxy_pass http://{{ item.item.domain.replace('.', '_') }}_upstreams{{ item.item.websocket_location }};
+  }
+  {% endif %}
+
+  {% if item.item.assets_location | default(False) %}
+  location {{ item.item.assets_location }} {
+    alias {{ item.item.assets_dir_path }};
+    expires max;
+    add_header Cache-Control public;
+  }
+  {% endif %}
+
+  {% if item.item.internal_files_location | default(False) %}
+  location {{ item.item.internal_files_location }} {
+    alias {{ item.item.internal_fiels_dir_path }};
+    internal;
+  }
+  {% endif %}
+
+  {% if item.item.upload_files_location | default(False) %}
+  location {{ item.item.upload_files_location }} {
+    alias {{ item.item.upload_files_dir_path }};
+  }
+  {% endif %}
+
+  {% if item.item.https %}
+  location /.well-known/acme-challenge {
+    default_type "text/plain";
+    root {{ nginx_acme_dir_path }};
+  }
+  {% endif %}
+
+  location {{ item.item.proxy_location | default(False) }} {
+    proxy_redirect off;
+    proxy_http_version 1.1;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $host;
+
+    {% if item.item.proxy_hot_cache | default(False) %}
+    proxy_cache_key $host$uri$is_args$query_string;
+    proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504 http_429;
+    proxy_cache_lock on; # not works for expired cache
+    proxy_cache_valid any 1s;
+    proxy_cache_background_update on;
+    proxy_cache_min_uses 1;
+    proxy_cache_methods GET;
+    add_header X-Cache-Status $upstream_cache_status;
+    {% endif %}
+
+    proxy_pass http://{{ item.item.domain.replace('.', '_') }}_upstreams;
+
+    client_max_body_size {{ item.item.proxy_client_max_body_size | default('10M') }};
+
+    # TODO gate it
+    {% for ip in nginx_dev_reload_envs_ips %}
+    # allow {{ ip }};
+    {% endfor %}
+    # deny all;
+    # in case of basic auth use this vars
+    # auth_basic "Restricted area";
+    # auth_basic_user_file {{ nginx_data_dir_path }}/.htpasswd;
+  }
+}

@@ -1,0 +1,71 @@
+---
+
+- name: Check zsh profile already setup
+  ansible.builtin.stat:
+    path: /etc/zsh_profile
+  register: zsh_profile_file
+
+- name: Update cache packages
+  ansible.builtin.apt:
+    update_cache: true
+  # when: not zsh_profile_file.stat.exists
+
+- name: Upgrade packages
+  ansible.builtin.apt:
+    upgrade: true
+  # when: not zsh_profile_file.stat.exists
+
+- name: Install core deps
+  ansible.builtin.apt:
+    pkg: [
+      'git', 'coreutils', 'sed', 'rsync', 'zsh',
+      'lz4', 'make', 'neovim',
+      'build-essential', 'sysfsutils', 'libsystemd-dev',
+      'libjemalloc-dev', 'tcl'
+    ]
+  # when: not zsh_profile_file.stat.exists
+
+- name: "Create ansible venv folder"
+  ansible.builtin.file:
+    path: /opt/ansible
+    state: directory
+    mode: 0755
+  # when: not zsh_profile_file.stat.exists
+
+- name: "Install ansible dependencies"
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - python3
+    - python3-dev
+    - python3-virtualenv
+    - libpq-dev
+  # when: not zsh_profile_file.stat.exists
+
+- name: "Install python libraries"
+  ansible.builtin.pip:
+    name: "{{ item }}"
+    state: present
+    virtualenv: /opt/ansible
+    virtualenv_site_packages: true
+  with_items:
+    - pip
+    - httpx
+    - ansible
+    - ansible-lint
+    - hcloud
+    - psycopg2
+    - jmespath
+  # when: not zsh_profile_file.stat.exists
+
+- name: Add Ansible to path
+  ansible.builtin.lineinfile:
+    create: true
+    path: '/etc/zsh_profile'
+    mode: 0744
+    line: 'export PATH="/opt/ansible/bin:$PATH"'
+
+- name: "Tell subsequent tasks to use our deploy virtualenv"
+  ansible.builtin.set_fact:
+    ansible_python_interpreter: /opt/ansible/bin/python

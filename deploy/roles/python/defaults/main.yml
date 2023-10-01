@@ -1,0 +1,16 @@
+---
+
+# https://www.python.org/downloads/source/
+# https://pypi.org/project/poetry/
+
+python_user: 'python'
+python_version: '3.11.5'
+python_poetry_version: '1.6.1'
+python_dest_dir_path: '/home/{{ python_user }}/{{ python_version }}'
+python_bin_path: '{{ python_dest_dir_path }}/bin/python3'
+python_build_temp: '/home/{{ python_user }}/build-{{ python_version }}'
+
+# because dest dir path is related to bin execs used to run everything
+python_cache_key: "{{ python_dest_dir_path | replace('/', '_') }}_poetry_{{ python_poetry_version }}"
+
+python_set_path_for_user: ''
